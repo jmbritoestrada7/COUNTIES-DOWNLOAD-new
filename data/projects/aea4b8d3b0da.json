@@ -1,0 +1,413 @@
+{
+  "id": "aea4b8d3b0da",
+  "name": "primeros 40 counties",
+  "created_at": "2026-07-15T15:54:56.897592+00:00",
+  "updated_at": "2026-07-15T15:55:05.643959+00:00",
+  "counties": [
+    {
+      "county": "Cheyenne",
+      "county_key": "cheyenne",
+      "state": "CO",
+      "state_fips": "08",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Kent",
+      "county_key": "kent",
+      "state": "DE",
+      "state_fips": "10",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Sussex",
+      "county_key": "sussex",
+      "state": "DE",
+      "state_fips": "10",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Sumter",
+      "county_key": "sumter",
+      "state": "FL",
+      "state_fips": "12",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Bacon",
+      "county_key": "bacon",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Bleckley",
+      "county_key": "bleckley",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Coffee",
+      "county_key": "coffee",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Cook",
+      "county_key": "cook",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Glascock",
+      "county_key": "glascock",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Grady",
+      "county_key": "grady",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Irwin",
+      "county_key": "irwin",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Jeff Davis",
+      "county_key": "jeff davis",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Johnson",
+      "county_key": "johnson",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Miller",
+      "county_key": "miller",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Montgomery",
+      "county_key": "montgomery",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Schley",
+      "county_key": "schley",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Seminole",
+      "county_key": "seminole",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Twiggs",
+      "county_key": "twiggs",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Warren",
+      "county_key": "warren",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Webster",
+      "county_key": "webster",
+      "state": "KY",
+      "state_fips": "21",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Caldwell",
+      "county_key": "caldwell",
+      "state": "LA",
+      "state_fips": "22",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "East Carroll",
+      "county_key": "east carroll",
+      "state": "LA",
+      "state_fips": "22",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Sabine",
+      "county_key": "sabine",
+      "state": "LA",
+      "state_fips": "22",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Midland",
+      "county_key": "midland",
+      "state": "MI",
+      "state_fips": "26",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Roscommon",
+      "county_key": "roscommon",
+      "state": "MI",
+      "state_fips": "26",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Cortland",
+      "county_key": "cortland",
+      "state": "NY",
+      "state_fips": "36",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Ashland",
+      "county_key": "ashland",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Harrison",
+      "county_key": "harrison",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Holmes",
+      "county_key": "holmes",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Paulding",
+      "county_key": "paulding",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Putnam",
+      "county_key": "putnam",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Scioto",
+      "county_key": "scioto",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Van Wert",
+      "county_key": "van wert",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Tillman",
+      "county_key": "tillman",
+      "state": "OK",
+      "state_fips": "40",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Adams",
+      "county_key": "adams",
+      "state": "PA",
+      "state_fips": "42",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Indiana",
+      "county_key": "indiana",
+      "state": "PA",
+      "state_fips": "42",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Juniata",
+      "county_key": "juniata",
+      "state": "PA",
+      "state_fips": "42",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Allendale",
+      "county_key": "allendale",
+      "state": "SC",
+      "state_fips": "45",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Stonewall",
+      "county_key": "stonewall",
+      "state": "TX",
+      "state_fips": "48",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Ritchie",
+      "county_key": "ritchie",
+      "state": "WV",
+      "state_fips": "54",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    }
+  ],
+  "drawings": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "source_file": "first 40 counties.xlsx"
+}

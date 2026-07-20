@@ -1,0 +1,403 @@
+{
+  "id": "d32add07a120",
+  "name": "COUNTIES",
+  "created_at": "2026-07-15T14:57:49.542329+00:00",
+  "updated_at": "2026-07-15T14:58:03.934665+00:00",
+  "counties": [
+    {
+      "county": "Cheyenne",
+      "county_key": "cheyenne",
+      "state": "CO",
+      "state_fips": "08",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Sumter",
+      "county_key": "sumter",
+      "state": "FL",
+      "state_fips": "12",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Coffee",
+      "county_key": "coffee",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Glascock",
+      "county_key": "glascock",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Irwin",
+      "county_key": "irwin",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Miller",
+      "county_key": "miller",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Montgomery",
+      "county_key": "montgomery",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Schley",
+      "county_key": "schley",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Seminole",
+      "county_key": "seminole",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Warren",
+      "county_key": "warren",
+      "state": "GA",
+      "state_fips": "13",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Bond",
+      "county_key": "bond",
+      "state": "IL",
+      "state_fips": "17",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Cass",
+      "county_key": "cass",
+      "state": "IL",
+      "state_fips": "17",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Ford",
+      "county_key": "ford",
+      "state": "IL",
+      "state_fips": "17",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Hardin",
+      "county_key": "hardin",
+      "state": "IL",
+      "state_fips": "17",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Fulton",
+      "county_key": "fulton",
+      "state": "IN",
+      "state_fips": "18",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Adams",
+      "county_key": "adams",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Cherokee",
+      "county_key": "cherokee",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Chickasaw",
+      "county_key": "chickasaw",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Floyd",
+      "county_key": "floyd",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Grundy",
+      "county_key": "grundy",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Howard",
+      "county_key": "howard",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Union",
+      "county_key": "union",
+      "state": "IA",
+      "state_fips": "19",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Webster",
+      "county_key": "webster",
+      "state": "KY",
+      "state_fips": "21",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Sabine",
+      "county_key": "sabine",
+      "state": "LA",
+      "state_fips": "22",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Waseca",
+      "county_key": "waseca",
+      "state": "MN",
+      "state_fips": "27",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Franklin",
+      "county_key": "franklin",
+      "state": "NE",
+      "state_fips": "31",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Rock",
+      "county_key": "rock",
+      "state": "NE",
+      "state_fips": "31",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Middlesex",
+      "county_key": "middlesex",
+      "state": "NJ",
+      "state_fips": "34",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Somerset",
+      "county_key": "somerset",
+      "state": "NJ",
+      "state_fips": "34",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "New York",
+      "county_key": "new york",
+      "state": "NY",
+      "state_fips": "36",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Renville",
+      "county_key": "renville",
+      "state": "ND",
+      "state_fips": "38",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Holmes",
+      "county_key": "holmes",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Paulding",
+      "county_key": "paulding",
+      "state": "OH",
+      "state_fips": "39",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Juniata",
+      "county_key": "juniata",
+      "state": "PA",
+      "state_fips": "42",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Spink",
+      "county_key": "spink",
+      "state": "SD",
+      "state_fips": "46",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Tripp",
+      "county_key": "tripp",
+      "state": "SD",
+      "state_fips": "46",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Stonewall",
+      "county_key": "stonewall",
+      "state": "TX",
+      "state_fips": "48",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Charles City",
+      "county_key": "charles city",
+      "state": "VA",
+      "state_fips": "51",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    },
+    {
+      "county": "Petersburg",
+      "county_key": "petersburg",
+      "state": "VA",
+      "state_fips": "51",
+      "status": "Downloaded",
+      "date": "",
+      "notes": "",
+      "str": ""
+    }
+  ],
+  "drawings": {
+    "type": "FeatureCollection",
+    "features": []
+  },
+  "source_file": "COUNTIES TO HIT.xlsx"
+}
