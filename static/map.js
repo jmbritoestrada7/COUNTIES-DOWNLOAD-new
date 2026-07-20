@@ -40,13 +40,14 @@
     const name = String(feature.properties?.name || '').trim().toLocaleLowerCase();
     return counties.find(c => c.state_fips === sf && c.county_key === name);
   }
-  function strColor(value) {
-    if (value === null) return '#64748b';
-    if (value < 80) return '#dc2626';
-    if (value < 100) return '#f59e0b';
-    if (value <= 125) return '#16a34a';
-    return '#2563eb';
+  function marketTemperature(value) {
+    if (value === null) return { color:'#64748b', label:'SIN DATOS', icon:'⚪' };
+    if (value >= 200) return { color:'#dc2626', label:'HOT', icon:'🔥' };
+    if (value >= 150) return { color:'#f97316', label:'MEDIO', icon:'🟠' };
+    if (value >= 100) return { color:'#eab308', label:'BAJO', icon:'🟡' };
+    return { color:'#2563eb', label:'CONGELADO', icon:'❄️' };
   }
+  function strColor(value) { return marketTemperature(value).color; }
   function countyStyle(feature) {
     const hit = countyMatch(feature);
     if (!hit || !visibleCounty(hit)) return { color:'#64748b', weight:.25, fillOpacity:.01, fillColor:'#cbd5e1' };
@@ -65,6 +66,7 @@
     if (!hit) return `<div class="county-popup"><h3>${esc(feature.properties.name)} County</h3><p>No está incluido en el Excel.</p></div>`;
     return `<div class="county-popup">
       <h3>${esc(feature.properties.name)} County, ${esc(hit.state)}</h3>
+      <div class="market-temp" style="background:${strColor(numericStr(hit))}">${marketTemperature(numericStr(hit)).icon} ${marketTemperature(numericStr(hit)).label}</div>
       <div class="avg-card" style="border-color:${strColor(numericStr(hit))}"><span>Average STR</span><strong>${esc(hit.str || 'N/D')}</strong></div>
       <div class="popup-meta"><b>Status:</b> ${esc(hit.status || 'Downloaded')}${hit.date ? `<br><b>Fecha:</b> ${esc(hit.date)}` : ''}</div>
       <h4>STR por acreage</h4>${strRows(hit)}
@@ -117,7 +119,7 @@
   function filteredCounties() { return counties.filter(visibleCounty); }
   function renderCountyList() {
     const shown = filteredCounties(); document.getElementById('countyCount').textContent = `${shown.length} / ${counties.length}`;
-    document.getElementById('countyList').innerHTML = shown.map(c => `<button type="button" class="county-item county-jump" data-key="${esc(c.state_fips)}|${esc(c.county_key)}"><b>${esc(c.county)}, ${esc(c.state)}</b><span class="str-badge" style="background:${strColor(numericStr(c))}22;color:${strColor(numericStr(c))}">AVG ${esc(c.str || 'N/D')}</span><br>${esc(c.status)}${c.priority ? ` · Prioridad ${esc(c.priority)}` : ''}${c.notes ? `<span class="note-preview">📝 ${esc(c.notes)}</span>` : ''}</button>`).join('') || '<div class="county-item">No hay counties con estos filtros.</div>';
+    document.getElementById('countyList').innerHTML = shown.map(c => `<button type="button" class="county-item county-jump" data-key="${esc(c.state_fips)}|${esc(c.county_key)}"><b>${esc(c.county)}, ${esc(c.state)}</b><span class="str-badge" style="background:${strColor(numericStr(c))}22;color:${strColor(numericStr(c))}">${marketTemperature(numericStr(c)).icon} ${marketTemperature(numericStr(c)).label} · AVG ${esc(c.str || 'N/D')}</span><br>${esc(c.status)}${c.priority ? ` · Prioridad ${esc(c.priority)}` : ''}${c.notes ? `<span class="note-preview">📝 ${esc(c.notes)}</span>` : ''}</button>`).join('') || '<div class="county-item">No hay counties con estos filtros.</div>';
     document.querySelectorAll('.county-jump').forEach(btn => btn.onclick = () => { const [sf,key] = btn.dataset.key.split('|'); zoomToCounty(counties.find(c => c.state_fips===sf && c.county_key===key)); });
   }
   function renderStats() {
