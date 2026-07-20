@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from flask_socketio import SocketIO, emit, join_room
 from werkzeug.utils import secure_filename
@@ -89,29 +90,39 @@ def find_column(df: pd.DataFrame, aliases: list[str]):
 
 
 
-def normalize_str(value) -> str:
-    """Normaliza STR a un porcentaje legible sin alterar el dato original de forma riesgosa."""
-    raw = str(value or "").strip().replace(",", ".")
+def parse_str(value, percent_formatted: bool = False) -> tuple[str, float | None]:
+    """Return a display percentage and numeric percent value.
+
+    Excel percentage-formatted cells store 134% as 1.34. When the cell format
+    contains %, multiply by 100. Plain numeric values such as 134 remain 134.
+    Text values ending in % are already expressed as percentages.
+    """
+    if value is None or value == "":
+        return "", None
+    raw = str(value).strip().replace(",", ".")
     if not raw:
-        return ""
-    had_percent = "%" in raw
+        return "", None
+    has_symbol = "%" in raw
     cleaned = re.sub(r"[^0-9.\-]", "", raw)
     try:
         number = float(cleaned)
     except (TypeError, ValueError):
-        return raw
-    if not had_percent and 0 <= number <= 1:
+        return raw, None
+    if percent_formatted and not has_symbol:
+        number *= 100
+    elif not has_symbol and 0 <= number < 1:
         number *= 100
     formatted = f"{number:.2f}".rstrip("0").rstrip(".")
-    return f"{formatted}%"
+    return f"{formatted}%", number
+
 
 STR_COLUMN_ALIASES = {
-    "str_2_5": ["STR 2-5", "STR_2_5", "STR 2 TO 5", "2-5"],
-    "str_5_10": ["STR 5-10", "STR_5_10", "STR 5 TO 10", "5-10"],
-    "str_10_20": ["STR 10-20", "STR_10_20", "STR 10 TO 20", "10-20"],
-    "str_20_60": ["STR 20-60", "STR_20_60", "STR 20 TO 60", "20-60"],
-    "str_60_100": ["STR 60-100", "STR_60_100", "STR 60 TO 100", "60-100"],
-    "str_100_plus": ["STR 100+", "STR_100_PLUS", "STR 100 PLUS", "100+"],
+    "str_2_5": ["STR 2-5", "SRT 2-5", "STR_2_5", "STR 2 TO 5", "2-5"],
+    "str_5_10": ["STR 5-10", "SRT 5-10", "STR_5_10", "STR 5 TO 10", "5-10"],
+    "str_10_20": ["STR 10-20", "SRT 10-20", "STR_10_20", "STR 10 TO 20", "10-20"],
+    "str_20_60": ["STR 20-60", "SRT 20-60", "STR_20_60", "STR 20 TO 60", "20-60"],
+    "str_60_100": ["STR 60-100", "SRT 60-100", "STR_60_100", "STR 60 TO 100", "60-100"],
+    "str_100_plus": ["STR 100+", "SRT 100+", "SRT 100- +", "STR 100- +", "STR_100_PLUS", "STR 100 PLUS", "100+"],
 }
 
 
@@ -120,49 +131,81 @@ def county_identity(row: dict) -> tuple[str, str]:
 
 
 def merge_existing_notes(new_counties: list[dict], old_counties: list[dict]) -> list[dict]:
-    old_notes = {county_identity(c): str(c.get("notes", "")) for c in old_counties}
+    old_data = {county_identity(c): c for c in old_counties}
     for county in new_counties:
-        key = county_identity(county)
-        # Keep an existing online note unless the newly uploaded workbook explicitly supplies one.
-        if not str(county.get("notes", "")).strip() and old_notes.get(key):
-            county["notes"] = old_notes[key]
+        previous = old_data.get(county_identity(county), {})
+        for field in ("notes", "priority", "assigned_to", "next_review"):
+            if not str(county.get(field, "")).strip() and previous.get(field):
+                county[field] = previous[field]
     return new_counties
 
 
 def read_counties_excel(path: Path) -> list[dict]:
-    df = pd.read_excel(path, dtype=str).fillna("")
-    county_col = find_column(df, ["county", "county name", "condado", "county_name"])
-    state_col = find_column(df, ["state", "state code", "estado", "st"])
-    status_col = find_column(df, ["status", "estado descarga", "download status", "descargado"])
-    date_col = find_column(df, ["date", "download date", "fecha", "fecha descarga"])
-    notes_col = find_column(df, ["notes", "nota", "notas", "comments", "comentarios"])
-    str_col = find_column(df, ["str", "sell through rate", "sell-through rate", "sell through", "tasa de venta", "porcentaje de venta", "avg str", "average of str"])
-    str_band_cols = {key: find_column(df, aliases) for key, aliases in STR_COLUMN_ALIASES.items()}
+    workbook = load_workbook(path, data_only=True, read_only=False)
+    sheet = workbook.active
+    header_values = [cell.value for cell in sheet[1]]
+    df_headers = pd.DataFrame(columns=[str(v or "").strip() for v in header_values])
+
+    county_col = find_column(df_headers, ["county", "county name", "condado", "county_name"])
+    state_col = find_column(df_headers, ["state", "state code", "estado", "st"])
+    status_col = find_column(df_headers, ["status", "estado descarga", "download status", "descargado"])
+    date_col = find_column(df_headers, ["date", "download date", "fecha", "fecha descarga"])
+    notes_col = find_column(df_headers, ["notes", "nota", "notas", "comments", "comentarios"])
+    priority_col = find_column(df_headers, ["priority", "prioridad"])
+    assigned_col = find_column(df_headers, ["assigned to", "assigned", "asignado a", "responsable"])
+    review_col = find_column(df_headers, ["next review", "review date", "proxima revision", "próxima revisión"])
+    str_col = find_column(df_headers, ["str", "sell through rate", "sell-through rate", "sell through", "tasa de venta", "porcentaje de venta", "avg str", "average of str"])
+    str_band_cols = {key: find_column(df_headers, aliases) for key, aliases in STR_COLUMN_ALIASES.items()}
     if not county_col or not state_col:
         raise ValueError("El Excel debe incluir columnas COUNTY/CONDADO y STATE/ESTADO.")
 
+    header_index = {str(v or "").strip(): i + 1 for i, v in enumerate(header_values)}
+
+    def cell_value(row_number: int, column_name: str | None):
+        if not column_name:
+            return "", False
+        cell = sheet.cell(row=row_number, column=header_index[column_name])
+        return cell.value, "%" in str(cell.number_format or "")
+
     rows = []
-    for _, row in df.iterrows():
-        county = normalize_county(row[county_col])
-        state, state_fips = normalize_state(row[state_col])
+    for row_number in range(2, sheet.max_row + 1):
+        county_value, _ = cell_value(row_number, county_col)
+        state_value, _ = cell_value(row_number, state_col)
+        county = normalize_county(county_value)
+        state, state_fips = normalize_state(state_value)
         if not county or not state_fips:
             continue
-        status = str(row[status_col]).strip() if status_col else "Downloaded"
+
+        avg_raw, avg_pct = cell_value(row_number, str_col)
+        avg_display, avg_value = parse_str(avg_raw, avg_pct)
+        band_data = {}
+        for key, column_name in str_band_cols.items():
+            raw, pct = cell_value(row_number, column_name)
+            display, numeric = parse_str(raw, pct)
+            band_data[key] = display
+            band_data[f"{key}_value"] = numeric
+
+        status_value, _ = cell_value(row_number, status_col)
+        date_value, _ = cell_value(row_number, date_col)
+        notes_value, _ = cell_value(row_number, notes_col)
+        priority_value, _ = cell_value(row_number, priority_col)
+        assigned_value, _ = cell_value(row_number, assigned_col)
+        review_value, _ = cell_value(row_number, review_col)
+
         rows.append({
             "county": county,
             "county_key": county.casefold(),
             "state": state,
             "state_fips": state_fips,
-            "status": status or "Downloaded",
-            "date": str(row[date_col]).strip() if date_col else "",
-            "notes": str(row[notes_col]).strip() if notes_col else "",
-            "str": normalize_str(row[str_col]) if str_col else "",
-            "str_2_5": normalize_str(row[str_band_cols["str_2_5"]]) if str_band_cols["str_2_5"] else "",
-            "str_5_10": normalize_str(row[str_band_cols["str_5_10"]]) if str_band_cols["str_5_10"] else "",
-            "str_10_20": normalize_str(row[str_band_cols["str_10_20"]]) if str_band_cols["str_10_20"] else "",
-            "str_20_60": normalize_str(row[str_band_cols["str_20_60"]]) if str_band_cols["str_20_60"] else "",
-            "str_60_100": normalize_str(row[str_band_cols["str_60_100"]]) if str_band_cols["str_60_100"] else "",
-            "str_100_plus": normalize_str(row[str_band_cols["str_100_plus"]]) if str_band_cols["str_100_plus"] else "",
+            "status": str(status_value or "Downloaded").strip() or "Downloaded",
+            "date": str(date_value or "").strip(),
+            "notes": str(notes_value or "").strip(),
+            "priority": str(priority_value or "").strip(),
+            "assigned_to": str(assigned_value or "").strip(),
+            "next_review": str(review_value or "").strip(),
+            "str": avg_display,
+            "str_value": avg_value,
+            **band_data,
         })
     if not rows:
         raise ValueError("No se encontraron filas válidas de counties y estados.")
@@ -251,6 +294,9 @@ def save_county_note(project_id: str):
     state_fips = str(data.get("state_fips", "")).strip()
     county_key = str(data.get("county_key", "")).strip().casefold()
     notes = str(data.get("notes", "")).strip()[:5000]
+    priority = str(data.get("priority", "")).strip()[:50]
+    assigned_to = str(data.get("assigned_to", "")).strip()[:200]
+    next_review = str(data.get("next_review", "")).strip()[:100]
     if not state_fips or not county_key:
         return jsonify({"error": "County inválido"}), 400
 
@@ -258,6 +304,9 @@ def save_county_note(project_id: str):
     for county in project.get("counties", []):
         if str(county.get("state_fips", "")) == state_fips and str(county.get("county_key", "")).casefold() == county_key:
             county["notes"] = notes
+            county["priority"] = priority
+            county["assigned_to"] = assigned_to
+            county["next_review"] = next_review
             updated = county
             break
     if updated is None:
