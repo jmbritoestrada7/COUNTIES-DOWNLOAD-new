@@ -529,7 +529,7 @@ def create_project():
         "counties": [],
         "drawings": {"type": "FeatureCollection", "features": []},
         "view_settings": {
-            "state_filter": "", "str_min": None, "str_max": None, "search_filter": "",
+            "state_filter": "", "str_metric": "str_value", "search_filter": "",
             "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True},
         },
     }

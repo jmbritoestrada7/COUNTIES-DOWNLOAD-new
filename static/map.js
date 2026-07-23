@@ -3,11 +3,22 @@
   let counties = window.PROJECT.counties || [];
   const clientId = crypto.randomUUID ? crypto.randomUUID() : String(Math.random());
   const status = document.getElementById('status');
+  const fileInput = document.getElementById('excelFile');
+  const fileName = document.getElementById('fileName');
+  if (fileInput && fileName) fileInput.addEventListener('change', () => {
+    fileName.textContent = fileInput.files?.[0]?.name || 'No file selected';
+  });
+  const mapPanel = document.getElementById('mapPanel');
+  const mobilePanelToggle = document.getElementById('mobilePanelToggle');
+  if (mapPanel && mobilePanelToggle) {
+    const syncPanelButton = () => { mobilePanelToggle.textContent = mapPanel.classList.contains('compact') ? 'Show Controls' : 'Hide Controls'; };
+    mobilePanelToggle.addEventListener('click', () => { mapPanel.classList.toggle('compact'); syncPanelButton(); setTimeout(() => map.invalidateSize(), 180); });
+    syncPanelButton();
+  }
   const LABEL_MIN_ZOOM = 7;
   const savedSettings = window.PROJECT.view_settings || {};
   let stateFilter = savedSettings.state_filter || '';
-  let strMin = Number.isFinite(Number(savedSettings.str_min)) && savedSettings.str_min !== null ? Number(savedSettings.str_min) : null;
-  let strMax = Number.isFinite(Number(savedSettings.str_max)) && savedSettings.str_max !== null ? Number(savedSettings.str_max) : null;
+  let strMetric = savedSettings.str_metric || 'str_value';
   let searchFilter = savedSettings.search_filter || '';
   let layerSettings = Object.assign({ counties:true, county_labels:true, str_colors:true, drawings:true, drawing_labels:true }, savedSettings.layers || {});
   let settingsTimer = null;
@@ -39,13 +50,21 @@
   function esc(v) { return String(v ?? '').replace(/[&<>"']/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
   function uid() { return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
   function drawingStyle(color = '#7c3aed') { return { color, weight:3, fillColor:color, fillOpacity:.25 }; }
-  function numericStr(c) { const n = Number(c?.str_value); return Number.isFinite(n) ? n : null; }
+  const STR_METRICS = {
+    str_value: { label:'Average STR', short:'Average', display:'str' },
+    str_2_5_value: { label:'STR 2–5 acres', short:'2–5 ac', display:'str_2_5' },
+    str_5_10_value: { label:'STR 5–10 acres', short:'5–10 ac', display:'str_5_10' },
+    str_10_20_value: { label:'STR 10–20 acres', short:'10–20 ac', display:'str_10_20' },
+    str_20_60_value: { label:'STR 20–60 acres', short:'20–60 ac', display:'str_20_60' },
+    str_60_100_value: { label:'STR 60–100 acres', short:'60–100 ac', display:'str_60_100' },
+    str_100_plus_value: { label:'STR 100+ acres', short:'100+ ac', display:'str_100_plus' }
+  };
+  function metricInfo() { return STR_METRICS[strMetric] || STR_METRICS.str_value; }
+  function numericStr(c) { const n = Number(c?.[strMetric]); return Number.isFinite(n) ? n : null; }
+  function displayStr(c) { const info=metricInfo(); return c?.[info.display] || (numericStr(c)===null ? 'N/A' : `${numericStr(c).toFixed(2).replace(/\.00$/,'')}%`); }
   function visibleCounty(c) {
     if (!c) return false;
     if (stateFilter && c.state !== stateFilter) return false;
-    const avg = numericStr(c);
-    if (strMin !== null && (avg === null || avg < strMin)) return false;
-    if (strMax !== null && (avg === null || avg > strMax)) return false;
     if (searchFilter && !`${c.county} ${c.state}`.toLowerCase().includes(searchFilter)) return false;
     return true;
   }
@@ -82,7 +101,7 @@
     return `<div class="county-popup">
       <h3>${esc(feature.properties.name)} County, ${esc(hit.state)}</h3>
       <div class="market-temp" style="background:${strColor(numericStr(hit))}">${marketTemperature(numericStr(hit)).icon} ${marketTemperature(numericStr(hit)).label}</div>
-      <div class="avg-card" style="border-color:${strColor(numericStr(hit))}"><span>Average STR</span><strong>${esc(hit.str || 'N/A')}</strong></div>
+      <div class="avg-card" style="border-color:${strColor(numericStr(hit))}"><span>${esc(metricInfo().label)}</span><strong>${esc(displayStr(hit))}</strong></div>
       <div class="popup-meta"><b>Status:</b> ${esc(hit.status || 'Downloaded')}${hit.date ? `<br><b>Date:</b> ${esc(hit.date)}` : ''}</div>
       <h4>STR by acreage</h4>${strRows(hit)}
       <div class="form-grid">
@@ -153,26 +172,26 @@
   function filteredCounties() { return counties.filter(visibleCounty); }
   function renderCountyList() {
     const shown = filteredCounties(); document.getElementById('countyCount').textContent = `${shown.length} / ${counties.length}`;
-    document.getElementById('countyList').innerHTML = shown.map(c => `<button type="button" class="county-item county-jump" data-key="${esc(c.state_fips)}|${esc(c.county_key)}"><b>${esc(c.county)}, ${esc(c.state)}</b><span class="str-badge" style="background:${strColor(numericStr(c))}22;color:${strColor(numericStr(c))}">${marketTemperature(numericStr(c)).icon} ${marketTemperature(numericStr(c)).label} · AVG ${esc(c.str || 'N/A')}</span><br>${esc(c.status)}${c.priority ? ` · Priority ${esc(c.priority)}` : ''}${c.notes ? `<span class="note-preview">📝 ${esc(c.notes)}</span>` : ''}</button>`).join('') || '<div class="county-item">No counties match these filters.</div>';
+    document.getElementById('countyList').innerHTML = shown.map(c => `<button type="button" class="county-item county-jump" data-key="${esc(c.state_fips)}|${esc(c.county_key)}"><b>${esc(c.county)}, ${esc(c.state)}</b><span class="str-badge" style="background:${strColor(numericStr(c))}22;color:${strColor(numericStr(c))}">${marketTemperature(numericStr(c)).icon} ${marketTemperature(numericStr(c)).label} · ${esc(metricInfo().short)} ${esc(displayStr(c))}</span><br>${esc(c.status)}${c.priority ? ` · Priority ${esc(c.priority)}` : ''}${c.notes ? `<span class="note-preview">📝 ${esc(c.notes)}</span>` : ''}</button>`).join('') || '<div class="county-item">No counties match these filters.</div>';
     document.querySelectorAll('.county-jump').forEach(btn => btn.onclick = () => { const [sf,key] = btn.dataset.key.split('|'); zoomToCounty(counties.find(c => c.state_fips===sf && c.county_key===key)); });
   }
   function renderStats() {
     const list = filteredCounties(); const vals = list.map(numericStr).filter(v => v !== null);
     const avg = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
     const best = list.filter(c => numericStr(c)!==null).sort((a,b)=>numericStr(b)-numericStr(a))[0];
-    document.getElementById('stats').innerHTML = `<div><b>${list.length}</b><span>Visible counties</span></div><div><b>${avg===null?'N/A':avg.toFixed(1)+'%'}</b><span>Average STR</span></div><div><b>${vals.filter(v=>v>=100).length}</b><span>STR ≥ 100%</span></div><div><b>${vals.filter(v=>v>=150).length}</b><span>STR ≥ 150%</span></div>${best?`<div class="wide"><b>${esc(best.county)}, ${esc(best.state)} · ${esc(best.str)}</b><span>Highest Average STR</span></div>`:''}`;
+    document.getElementById('stats').innerHTML = `<div><b>${list.length}</b><span>Visible counties</span></div><div><b>${avg===null?'N/A':avg.toFixed(1)+'%'}</b><span>${esc(metricInfo().label)}</span></div><div><b>${vals.filter(v=>v>=100).length}</b><span>STR ≥ 100%</span></div><div><b>${vals.filter(v=>v>=150).length}</b><span>STR ≥ 150%</span></div>${best?`<div class="wide"><b>${esc(best.county)}, ${esc(best.state)} · ${esc(displayStr(best))}</b><span>Highest ${esc(metricInfo().label)}</span></div>`:''}`;
   }
   function renderStateOptions() {
     const select = document.getElementById('stateFilter'); const current = select.value;
     const states = [...new Set(counties.map(c=>c.state).filter(Boolean))].sort();
     select.innerHTML = '<option value="">All states</option>' + states.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join(''); select.value = current;
   }
-  function renderAllPanels() { renderStateOptions(); renderStats(); renderCountyList(); renderDrawnAreas(); }
+  function renderAllPanels() { renderStateOptions(); renderStats(); renderCountyList(); renderDrawnAreas(); const legend=document.getElementById('legendMetric'); if(legend) legend.textContent=metricInfo().label; }
   function zoomToCounty(target) { if (!target) return; let found; countyLayer.eachLayer(l => { const h=countyMatch(l.feature); if (h && h.state_fips===target.state_fips && h.county_key===target.county_key) found=l; }); if (found) { map.fitBounds(found.getBounds(), {padding:[35,35],maxZoom:9}); setTimeout(()=>found.fire('click'),250); } }
   function fitVisibleCounties() { const bounds=[]; countyLayer.eachLayer(l=>{ const h=countyMatch(l.feature); if (visibleCounty(h)) bounds.push(l.getBounds()); }); if (bounds.length) { const b=bounds[0]; bounds.slice(1).forEach(x=>b.extend(x)); map.fitBounds(b,{padding:[20,20]}); } }
 
   function currentViewSettings() {
-    return { state_filter:stateFilter, str_min:strMin, str_max:strMax, search_filter:searchFilter, layers:{...layerSettings} };
+    return { state_filter:stateFilter, str_metric:strMetric, search_filter:searchFilter, layers:{...layerSettings} };
   }
   function setAutosave(text) { const el=document.getElementById('autosaveState'); if(el) el.textContent=text; }
   function queueSettingsSave() {
@@ -193,8 +212,7 @@
   }
   function applySettingsToInputs() {
     document.getElementById('countySearch').value=searchFilter;
-    document.getElementById('strMin').value=strMin===null?'':strMin;
-    document.getElementById('strMax').value=strMax===null?'':strMax;
+    document.getElementById('strMetric').value=strMetric;
     document.getElementById('stateFilter').value=stateFilter;
   }
 
@@ -302,16 +320,18 @@
 
   document.getElementById('countySearch').addEventListener('input', e=>{ searchFilter=e.target.value.trim().toLowerCase(); refreshCountyStyles(); queueSettingsSave(); });
   document.getElementById('stateFilter').addEventListener('change', e=>{ stateFilter=e.target.value; refreshCountyStyles(); fitVisibleCounties(); queueSettingsSave(); });
-  function updateStrRange() {
-    const minRaw=document.getElementById('strMin').value, maxRaw=document.getElementById('strMax').value;
-    strMin=minRaw===''?null:Number(minRaw); strMax=maxRaw===''?null:Number(maxRaw);
-    document.querySelectorAll('.quick-ranges button').forEach(b=>b.classList.toggle('active',String(b.dataset.min)===minRaw&&String(b.dataset.max)===maxRaw));
+  document.getElementById('strMetric').addEventListener('change', e=>{
+    strMetric=e.target.value;
+    refreshCountyStyles();
+    queueSettingsSave();
+    status.textContent=`Colors updated using ${metricInfo().label}.`;
+  });
+  document.getElementById('clearFilters').onclick=()=>{
+    stateFilter=''; searchFilter='';
+    document.getElementById('countySearch').value='';
+    document.getElementById('stateFilter').value='';
     refreshCountyStyles(); fitVisibleCounties(); queueSettingsSave();
-  }
-  document.getElementById('strMin').addEventListener('change',updateStrRange);
-  document.getElementById('strMax').addEventListener('change',updateStrRange);
-  document.querySelectorAll('.quick-ranges button').forEach(btn=>btn.onclick=()=>{document.getElementById('strMin').value=btn.dataset.min;document.getElementById('strMax').value=btn.dataset.max;updateStrRange();});
-  document.getElementById('clearFilters').onclick=()=>{ stateFilter='';strMin=null;strMax=null;searchFilter='';document.getElementById('countySearch').value='';document.getElementById('stateFilter').value='';document.getElementById('strMin').value='';document.getElementById('strMax').value='';document.querySelectorAll('.quick-ranges button').forEach(b=>b.classList.remove('active'));refreshCountyStyles();fitVisibleCounties();queueSettingsSave(); };
+  };
   document.querySelectorAll('[data-layer]').forEach(box=>box.addEventListener('change',()=>{layerSettings[box.dataset.layer]=box.checked;applyLayerSettings();queueSettingsSave();}));
 
   const socket=io();
@@ -320,7 +340,7 @@
   socket.on('drawings_updated',d=>{if(d.sender!==clientId){replaceDrawings(d.drawings);status.textContent='Another user updated the drawn areas.';}});
   socket.on('counties_updated',d=>{counties=d.counties||[];refreshCountyStyles();status.textContent='The county data was updated by another user.';});
   socket.on('county_note_updated',d=>{if(d.sender!==clientId&&d.county){upsertCounty(d.county);renderAllPanels();status.textContent=`Another user updated ${d.county.county} County.`;map.closePopup();}});
-  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMin=v.str_min??null;strMax=v.str_max??null;searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
+  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.str_metric||'str_value';searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
   socket.on('project_renamed',d=>{if(d.name){document.querySelector('.panel h2').textContent=d.name;document.title=d.name;}});
 
   document.getElementById('uploadForm').addEventListener('submit',async e=>{e.preventDefault();const file=document.getElementById('excelFile').files[0];if(!file)return;const fd=new FormData();fd.append('file',file);status.textContent='Processing file…';const res=await fetch(`/api/projects/${projectId}/excel`,{method:'POST',body:fd});const data=await res.json();if(!res.ok){status.textContent=data.error||'Error uploading file';return;}counties=data.counties;refreshCountyStyles();status.textContent=`${data.count} counties loaded.`;fitVisibleCounties();});
