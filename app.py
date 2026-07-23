@@ -37,6 +37,8 @@ STATE_FIPS = {
     "NJ":"34","NM":"35","NY":"36","NC":"37","ND":"38","OH":"39","OK":"40","OR":"41","PA":"42","RI":"44",
     "SC":"45","SD":"46","TN":"47","TX":"48","UT":"49","VT":"50","VA":"51","WA":"53","WV":"54","WI":"55","WY":"56"
 }
+FIPS_STATES = {v: k for k, v in STATE_FIPS.items()}
+
 STATE_NAMES = {
     "ALABAMA":"AL","ALASKA":"AK","ARIZONA":"AZ","ARKANSAS":"AR","CALIFORNIA":"CA","COLORADO":"CO","CONNECTICUT":"CT",
     "DELAWARE":"DE","DISTRICT OF COLUMBIA":"DC","FLORIDA":"FL","GEORGIA":"GA","HAWAII":"HI","IDAHO":"ID","ILLINOIS":"IL",
@@ -47,6 +49,76 @@ STATE_NAMES = {
     "SOUTH CAROLINA":"SC","SOUTH DAKOTA":"SD","TENNESSEE":"TN","TEXAS":"TX","UTAH":"UT","VERMONT":"VT","VIRGINIA":"VA",
     "WASHINGTON":"WA","WEST VIRGINIA":"WV","WISCONSIN":"WI","WYOMING":"WY"
 }
+
+
+PROJECT_SCHEMA_VERSION = 5
+
+
+def migrate_project(project: dict) -> tuple[dict, bool]:
+    """Upgrade older stored projects without changing their permanent links."""
+    changed = False
+    if not isinstance(project, dict):
+        raise ValueError("Invalid project data")
+
+    version = int(project.get("schema_version") or 1)
+    project.setdefault("counties", [])
+    project.setdefault("drawings", {"type": "FeatureCollection", "features": []})
+
+    drawings = project.get("drawings")
+    if not isinstance(drawings, dict) or drawings.get("type") != "FeatureCollection":
+        project["drawings"] = {"type": "FeatureCollection", "features": []}
+        drawings = project["drawings"]
+        changed = True
+
+    for index, feature in enumerate(drawings.get("features") or [], start=1):
+        if not isinstance(feature, dict):
+            continue
+        props = feature.setdefault("properties", {})
+        if not props.get("id"):
+            props["id"] = uuid.uuid4().hex
+            changed = True
+        if not str(props.get("name") or "").strip():
+            props["name"] = f"Unnamed Area {index}"
+            changed = True
+        if not props.get("shapeType"):
+            geom_type = str((feature.get("geometry") or {}).get("type") or "")
+            props["shapeType"] = "Circle" if geom_type == "Point" and props.get("radius") else "Polygon"
+            changed = True
+        if not props.get("color"):
+            props["color"] = "#7c3aed"
+            changed = True
+        if "visible" not in props:
+            props["visible"] = True
+            changed = True
+
+    default_settings = {
+        "state_filter": "",
+        "str_min": None,
+        "str_max": None,
+        "search_filter": "",
+        "layers": {
+            "counties": True,
+            "county_labels": True,
+            "str_colors": True,
+            "drawings": True,
+            "drawing_labels": True,
+        },
+    }
+    settings = project.setdefault("view_settings", {})
+    for key, value in default_settings.items():
+        if key not in settings:
+            settings[key] = value.copy() if isinstance(value, dict) else value
+            changed = True
+    layers = settings.setdefault("layers", {})
+    for key, value in default_settings["layers"].items():
+        if key not in layers:
+            layers[key] = value
+            changed = True
+
+    if version != PROJECT_SCHEMA_VERSION:
+        project["schema_version"] = PROJECT_SCHEMA_VERSION
+        changed = True
+    return project, changed
 
 
 def now_iso() -> str:
@@ -145,6 +217,17 @@ class ProjectStorage:
             raise FileNotFoundError(project_id)
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def delete(self, project_id: str) -> None:
+        validate_project_id(project_id)
+        path = project_path(project_id)
+        if path.exists():
+            path.unlink()
+        if self.client:
+            try:
+                self.client.delete_object(Bucket=self.bucket, Key=self.key(project_id))
+            except (BotoCoreError, ClientError) as exc:
+                raise RuntimeError(f"Could not delete the project from Cloudflare R2: {exc}") from exc
+
     def list_projects(self) -> list[dict]:
         projects_by_id: dict[str, dict] = {}
 
@@ -188,10 +271,15 @@ storage = ProjectStorage()
 
 
 def load_project(project_id: str) -> dict:
-    return storage.load(project_id)
+    project, changed = migrate_project(storage.load(project_id))
+    if changed:
+        project["updated_at"] = now_iso()
+        storage.save(project)
+    return project
 
 
 def save_project(project: dict) -> None:
+    project, _ = migrate_project(project)
     project["updated_at"] = now_iso()
     storage.save(project)
 
@@ -340,6 +428,69 @@ def read_counties_excel(path: Path) -> list[dict]:
     return rows
 
 
+def read_counties_csv(path: Path) -> list[dict]:
+    """Read a CSV containing at minimum County and State columns.
+
+    STR columns are optional. Counties without STR are intentionally retained
+    and displayed with a neutral gray color in the map.
+    """
+    last_error = None
+    df = None
+    for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            df = pd.read_csv(path, dtype=object, encoding=encoding)
+            break
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    if df is None:
+        raise ValueError(f"Could not read the CSV file: {last_error}")
+
+    county_col = find_column(df, ["county", "county name", "condado", "county_name"])
+    state_col = find_column(df, ["state", "state code", "estado", "st"])
+    status_col = find_column(df, ["status", "download status", "descargado"])
+    date_col = find_column(df, ["date", "download date", "fecha", "fecha descarga"])
+    notes_col = find_column(df, ["notes", "nota", "notas", "comments", "comentarios"])
+    priority_col = find_column(df, ["priority", "prioridad"])
+    assigned_col = find_column(df, ["assigned to", "assigned", "asignado a", "responsable"])
+    review_col = find_column(df, ["next review", "review date", "proxima revision", "próxima revisión"])
+    str_col = find_column(df, ["str", "sell through rate", "sell-through rate", "sell through", "avg str", "average of str"])
+    str_band_cols = {key: find_column(df, aliases) for key, aliases in STR_COLUMN_ALIASES.items()}
+    if not county_col or not state_col:
+        raise ValueError("The CSV file must include COUNTY and STATE columns.")
+
+    def value(row, col):
+        if not col:
+            return ""
+        val = row.get(col, "")
+        return "" if pd.isna(val) else val
+
+    rows = []
+    for _, row in df.iterrows():
+        county = normalize_county(value(row, county_col))
+        state, state_fips = normalize_state(value(row, state_col))
+        if not county or not state_fips:
+            continue
+        avg_display, avg_value = parse_str(value(row, str_col), False)
+        band_data = {}
+        for key, col in str_band_cols.items():
+            display, numeric = parse_str(value(row, col), False)
+            band_data[key] = display
+            band_data[f"{key}_value"] = numeric
+        rows.append({
+            "county": county, "county_key": county.casefold(), "state": state, "state_fips": state_fips,
+            "status": str(value(row, status_col) or "Selected").strip() or "Selected",
+            "date": str(value(row, date_col) or "").strip(),
+            "notes": str(value(row, notes_col) or "").strip(),
+            "priority": str(value(row, priority_col) or "").strip(),
+            "assigned_to": str(value(row, assigned_col) or "").strip(),
+            "next_review": str(value(row, review_col) or "").strip(),
+            "str": avg_display, "str_value": avg_value, **band_data,
+        })
+    if not rows:
+        raise ValueError("No valid county and state rows were found.")
+    return rows
+
+
 @app.get("/")
 def index():
     storage_error = ""
@@ -374,8 +525,13 @@ def create_project():
         "name": name,
         "created_at": now_iso(),
         "updated_at": now_iso(),
+        "schema_version": PROJECT_SCHEMA_VERSION,
         "counties": [],
         "drawings": {"type": "FeatureCollection", "features": []},
+        "view_settings": {
+            "state_filter": "", "str_min": None, "str_max": None, "search_filter": "",
+            "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True},
+        },
     }
     save_project(project)
     return redirect(url_for("map_view", project_id=project_id))
@@ -406,15 +562,16 @@ def upload_excel(project_id: str):
         return jsonify({"error": "Map not found"}), 404
     file = request.files.get("file")
     if not file or not file.filename:
-        return jsonify({"error": "Selecciona un archivo Excel."}), 400
+        return jsonify({"error": "Select an Excel file."}), 400
     ext = Path(file.filename).suffix.lower()
-    if ext not in {".xlsx", ".xlsm"}:
-        return jsonify({"error": "Usa un archivo .xlsx o .xlsm."}), 400
+    if ext not in {".xlsx", ".xlsm", ".csv"}:
+        return jsonify({"error": "Use an .xlsx, .xlsm, or .csv file."}), 400
     filename = f"{project_id}_{secure_filename(file.filename)}"
     dest = UPLOAD_DIR / filename
     file.save(dest)
     try:
-        counties = merge_existing_notes(read_counties_excel(dest), project.get("counties", []))
+        imported = read_counties_csv(dest) if ext == ".csv" else read_counties_excel(dest)
+        counties = merge_existing_notes(imported, project.get("counties", []))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
     project["counties"] = counties
@@ -422,6 +579,37 @@ def upload_excel(project_id: str):
     save_project(project)
     socketio.emit("counties_updated", {"counties": counties, "updated_at": project["updated_at"]}, to=project_id)
     return jsonify({"ok": True, "count": len(counties), "counties": counties})
+
+
+@app.post("/api/projects/<project_id>/counties/activate")
+def activate_county(project_id: str):
+    try:
+        project = load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error": "Map not found"}), 404
+    data = request.get_json(silent=True) or {}
+    state_fips = str(data.get("state_fips") or "").zfill(2)
+    county = normalize_county(data.get("county"))
+    state = FIPS_STATES.get(state_fips, "")
+    if not state or not county:
+        return jsonify({"error": "Invalid county"}), 400
+    county_key = county.casefold()
+    for existing in project.get("counties", []):
+        if existing.get("state_fips") == state_fips and existing.get("county_key") == county_key:
+            return jsonify({"ok": True, "county": existing, "already_active": True})
+    county_data = {
+        "county": county, "county_key": county_key, "state": state, "state_fips": state_fips,
+        "status": "Manually selected", "date": "", "notes": "", "priority": "",
+        "assigned_to": "", "next_review": "", "str": "", "str_value": None,
+    }
+    for key in STR_COLUMN_ALIASES:
+        county_data[key] = ""
+        county_data[f"{key}_value"] = None
+    project.setdefault("counties", []).append(county_data)
+    project["counties"].sort(key=lambda c: (c.get("state", ""), c.get("county", "")))
+    save_project(project)
+    socketio.emit("counties_updated", {"counties": project["counties"], "updated_at": project["updated_at"]}, to=project_id)
+    return jsonify({"ok": True, "county": county_data, "counties": project["counties"]})
 
 
 @app.post("/api/projects/<project_id>/counties/notes")
@@ -439,7 +627,7 @@ def save_county_note(project_id: str):
     assigned_to = str(data.get("assigned_to", "")).strip()[:200]
     next_review = str(data.get("next_review", "")).strip()[:100]
     if not state_fips or not county_key:
-        return jsonify({"error": "County inválido"}), 400
+        return jsonify({"error": "Invalid county"}), 400
 
     updated = None
     for county in project.get("counties", []):
@@ -451,7 +639,7 @@ def save_county_note(project_id: str):
             updated = county
             break
     if updated is None:
-        return jsonify({"error": "County no encontrado en el Excel"}), 404
+        return jsonify({"error": "County was not found in the Excel file"}), 404
 
     save_project(project)
     socketio.emit(
@@ -471,11 +659,78 @@ def save_drawings(project_id: str):
     data = request.get_json(silent=True) or {}
     drawings = data.get("drawings")
     if not isinstance(drawings, dict) or drawings.get("type") != "FeatureCollection":
-        return jsonify({"error": "GeoJSON inválido"}), 400
+        return jsonify({"error": "Invalid GeoJSON"}), 400
     project["drawings"] = drawings
     save_project(project)
     socketio.emit("drawings_updated", {"drawings": drawings, "sender": data.get("sender")}, to=project_id)
     return jsonify({"ok": True, "updated_at": project["updated_at"]})
+
+
+@app.post("/api/projects/<project_id>/settings")
+def save_project_settings(project_id: str):
+    try:
+        project = load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error": "Map not found"}), 404
+    data = request.get_json(silent=True) or {}
+    settings = data.get("view_settings")
+    if not isinstance(settings, dict):
+        return jsonify({"error": "Invalid settings"}), 400
+    allowed_layers = {"counties", "county_labels", "str_colors", "drawings", "drawing_labels"}
+    clean = {
+        "state_filter": str(settings.get("state_filter") or "")[:2].upper(),
+        "str_min": settings.get("str_min") if isinstance(settings.get("str_min"), (int, float)) else None,
+        "str_max": settings.get("str_max") if isinstance(settings.get("str_max"), (int, float)) else None,
+        "search_filter": str(settings.get("search_filter") or "")[:200],
+        "layers": {k: bool((settings.get("layers") or {}).get(k, True)) for k in allowed_layers},
+    }
+    project["view_settings"] = clean
+    save_project(project)
+    socketio.emit("settings_updated", {"view_settings": clean, "sender": data.get("sender")}, to=project_id)
+    return jsonify({"ok": True, "view_settings": clean, "updated_at": project["updated_at"]})
+
+
+@app.post("/api/projects/<project_id>/rename")
+def rename_project(project_id: str):
+    try:
+        project = load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error": "Map not found"}), 404
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()[:150]
+    if not name:
+        return jsonify({"error": "Enter a project name"}), 400
+    project["name"] = name
+    save_project(project)
+    socketio.emit("project_renamed", {"name": name}, to=project_id)
+    return jsonify({"ok": True, "name": name})
+
+
+@app.post("/api/projects/<project_id>/duplicate")
+def duplicate_project(project_id: str):
+    try:
+        source = load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error": "Map not found"}), 404
+    clone = json.loads(json.dumps(source))
+    clone["id"] = uuid.uuid4().hex[:12]
+    clone["name"] = f"{source.get('name', 'Map')} Copy"
+    clone["created_at"] = now_iso()
+    clone["updated_at"] = now_iso()
+    save_project(clone)
+    return jsonify({"ok": True, "id": clone["id"], "url": url_for("map_view", project_id=clone["id"])})
+
+
+@app.delete("/api/projects/<project_id>")
+def delete_project(project_id: str):
+    try:
+        load_project(project_id)
+        storage.delete(project_id)
+    except FileNotFoundError:
+        return jsonify({"error": "Map not found"}), 404
+    except ValueError:
+        return jsonify({"error": "Invalid project id"}), 400
+    return jsonify({"ok": True})
 
 
 @socketio.on("join_project")

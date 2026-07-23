@@ -5,39 +5,38 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>County Map Generator</title>
   <style>
-    body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;color:#17212b}
-    .wrap{max-width:850px;margin:55px auto;padding:0 20px}
-    .card{background:#fff;border-radius:14px;padding:25px;box-shadow:0 8px 28px #0002;margin-bottom:20px}
-    input,button{font:inherit;padding:11px;border-radius:7px;border:1px solid #bbc3cc}
-    input{width:min(430px,70%)}button{background:#1769aa;color:#fff;border:0;cursor:pointer}
-    a{color:#1769aa;text-decoration:none}.item{padding:13px 0;border-top:1px solid #e4e8ec;display:flex;justify-content:space-between;gap:15px}
-    .storage{display:inline-block;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;margin-bottom:10px}
-    .storage.r2{background:#dcfce7;color:#166534}.storage.local{background:#fef3c7;color:#92400e}
-    .error{background:#fee2e2;color:#991b1b;padding:12px;border-radius:8px;margin:12px 0}
-    .hint{font-size:13px;color:#52606d}
+    *{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;color:#17212b}.wrap{max-width:1050px;margin:40px auto;padding:0 20px}.card{background:#fff;border-radius:14px;padding:24px;box-shadow:0 8px 28px #0002;margin-bottom:20px}input,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #bbc3cc}input{width:min(430px,70%)}button{background:#1769aa;color:#fff;border:0;cursor:pointer}.secondary{background:#5d6975}.danger{background:#b91c1c}a{color:#1769aa;text-decoration:none}.storage{display:inline-block;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;margin-bottom:10px}.storage.r2{background:#dcfce7;color:#166534}.storage.local{background:#fef3c7;color:#92400e}.error{background:#fee2e2;color:#991b1b;padding:12px;border-radius:8px;margin:12px 0}.hint,.meta{font-size:13px;color:#52606d}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.toolbar input{flex:1;min-width:220px}.projects{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}.project{border:1px solid #dce2e8;border-radius:12px;padding:15px;background:#fbfdff}.project h3{margin:0 0 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}.actions button,.actions a{font-size:12px;padding:7px 9px;border-radius:6px}.actions a{background:#1769aa;color:#fff}.empty{padding:30px;text-align:center;color:#64748b}.topline{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;flex-wrap:wrap}
   </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
-    <div class="storage {{ storage_mode }}">
-      {% if storage_mode == 'r2' %}✓ Permanent R2 storage is active{% else %}⚠ Local mode: maps may be deleted when Render restarts{% endif %}
-    </div>
+    <div class="storage {{ storage_mode }}">{% if storage_mode == 'r2' %}✓ Permanent R2 storage is active{% else %}⚠ Local mode: maps may be deleted when Render restarts{% endif %}</div>
     {% if storage_error %}<div class="error">{{ storage_error }}</div>{% endif %}
-    <h1>County Map Generator</h1>
-    <p>Create a map, upload an Excel file, and share the permanent link for collaborative viewing and drawing.</p>
-    <form method="post" action="/projects">
-      <input name="name" placeholder="Map name" required>
-      <button>Create Map</button>
-    </form>
+    <div class="topline"><div><h1>County Map Generator</h1><p>Create permanent, collaborative county maps with STR filters and named drawing areas.</p></div></div>
+    <form method="post" action="/projects"><input name="name" placeholder="New map name" required><button>Create Map</button></form>
     {% if storage_mode != 'r2' %}<p class="hint">Configure the R2 environment variables in Render before creating maps you want to keep permanently.</p>{% endif %}
   </div>
   <div class="card">
-    <h2>My Maps</h2>
-    {% if projects %}
-      {% for p in projects %}<div class="item"><span>{{p.name}}</span><a href="/map/{{p.id}}">Open Map</a></div>{% endfor %}
-    {% else %}<p>No maps have been created yet.</p>{% endif %}
+    <div class="toolbar"><h2 style="margin:0;flex:1">My Maps</h2><input id="projectSearch" placeholder="Search maps..."></div>
+    <div id="projects" class="projects">
+      {% for p in projects %}
+      <article class="project" data-name="{{p.name|lower}}" data-id="{{p.id}}">
+        <h3 class="project-name">{{p.name}}</h3><div class="meta">Last updated: {{p.updated_at[:10] if p.updated_at else 'Unknown'}}</div>
+        <div class="actions"><a href="/map/{{p.id}}">Open</a><button class="secondary rename">Rename</button><button class="secondary duplicate">Duplicate</button><button class="danger delete">Delete</button></div>
+      </article>
+      {% else %}<div class="empty">No maps have been created yet.</div>{% endfor %}
+    </div>
   </div>
 </div>
-</body>
-</html>
+<script>
+const search=document.getElementById('projectSearch');
+search.addEventListener('input',()=>{const q=search.value.trim().toLowerCase();document.querySelectorAll('.project').forEach(x=>x.style.display=x.dataset.name.includes(q)?'block':'none');});
+document.querySelectorAll('.project').forEach(card=>{
+  const id=card.dataset.id;
+  card.querySelector('.rename').onclick=async()=>{const current=card.querySelector('.project-name').textContent;const name=prompt('Project name:',current);if(!name?.trim())return;const r=await fetch(`/api/projects/${id}/rename`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim()})});const d=await r.json();if(!r.ok)return alert(d.error||'Could not rename');card.querySelector('.project-name').textContent=d.name;card.dataset.name=d.name.toLowerCase();};
+  card.querySelector('.duplicate').onclick=async()=>{const r=await fetch(`/api/projects/${id}/duplicate`,{method:'POST'});const d=await r.json();if(!r.ok)return alert(d.error||'Could not duplicate');location.href=d.url;};
+  card.querySelector('.delete').onclick=async()=>{if(!confirm(`Permanently delete “${card.querySelector('.project-name').textContent}”?`))return;const r=await fetch(`/api/projects/${id}`,{method:'DELETE'});const d=await r.json();if(!r.ok)return alert(d.error||'Could not delete');card.remove();};
+});
+</script>
+</body></html>

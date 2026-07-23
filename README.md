@@ -58,3 +58,12 @@ Se aceptan valores como `35%`, `35` o `0.35`; todos se muestran como porcentaje.
 
 ## Etiquetas de counties
 Los nombres se muestran únicamente cuando el mapa alcanza zoom 7 o superior para evitar etiquetas demasiado grandes o amontonadas.
+
+
+## Version 5 additions
+- Existing R2 map links are migrated automatically without changing the URL.
+- Excel and CSV uploads are supported; only County and State are required.
+- Counties without STR remain active and use a neutral gray color.
+- Clicking any inactive county allows the user to activate it manually.
+- Named polygons, rectangles, and circles are stored permanently.
+- Layer visibility and STR filters are autosaved.

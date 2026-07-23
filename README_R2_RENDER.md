@@ -29,3 +29,16 @@ The endpoint variable is optional because the app builds it automatically from `
 ## Important
 
 Do not place R2 keys inside `app.py` or commit them to GitHub. Keep them only in Render Environment Variables.
+
+## Version 3 additions
+
+- Named polygons, rectangles, and circles.
+- Visible area labels on the map.
+- Drawn Areas panel with Focus, Hide/Show, Rename, and Delete.
+- Permanent synchronization of area names and geometry in R2.
+- Average STR minimum/maximum range filter.
+- Quick STR range buttons with automatic county colors:
+  - Below 100%: blue
+  - 100–149.99%: yellow
+  - 150–199.99%: orange
+  - 200%+: red
