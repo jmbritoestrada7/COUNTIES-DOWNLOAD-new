@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 from openpyxl import load_workbook
 from flask import Flask, jsonify, redirect, render_template, request, url_for
 from flask_socketio import SocketIO, emit, join_room
@@ -56,16 +59,141 @@ def project_path(project_id: str) -> Path:
     return PROJECT_DIR / f"{project_id}.json"
 
 
+def validate_project_id(project_id: str) -> str:
+    if not re.fullmatch(r"[a-f0-9]{12}", str(project_id or "")):
+        raise ValueError("Invalid project id")
+    return project_id
+
+
+class ProjectStorage:
+    """Persist project JSON locally and, when configured, in Cloudflare R2.
+
+    Render's normal filesystem is ephemeral. R2 is the source of truth in
+    production; the local copy is only a fast cache and a development fallback.
+    """
+
+    def __init__(self) -> None:
+        self.account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
+        self.access_key = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+        self.secret_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+        self.bucket = os.environ.get("R2_BUCKET_NAME", "").strip()
+        self.prefix = os.environ.get("R2_PROJECT_PREFIX", "projects").strip().strip("/") or "projects"
+        self.endpoint = os.environ.get("R2_ENDPOINT_URL", "").strip()
+        self.client = None
+
+        configured = all([self.account_id, self.access_key, self.secret_key, self.bucket])
+        if configured:
+            endpoint_url = self.endpoint or f"https://{self.account_id}.r2.cloudflarestorage.com"
+            self.client = boto3.client(
+                service_name="s3",
+                endpoint_url=endpoint_url,
+                aws_access_key_id=self.access_key,
+                aws_secret_access_key=self.secret_key,
+                region_name="auto",
+                config=Config(signature_version="s3v4", retries={"max_attempts": 4, "mode": "standard"}),
+            )
+
+    @property
+    def mode(self) -> str:
+        return "r2" if self.client else "local"
+
+    def key(self, project_id: str) -> str:
+        validate_project_id(project_id)
+        return f"{self.prefix}/{project_id}.json"
+
+    def save(self, project: dict) -> None:
+        project_id = validate_project_id(str(project.get("id", "")))
+        payload = json.dumps(project, ensure_ascii=False, indent=2).encode("utf-8")
+
+        # Always keep a local cache so local development works without R2.
+        project_path(project_id).write_bytes(payload)
+
+        if self.client:
+            try:
+                self.client.put_object(
+                    Bucket=self.bucket,
+                    Key=self.key(project_id),
+                    Body=payload,
+                    ContentType="application/json; charset=utf-8",
+                    CacheControl="no-store",
+                )
+            except (BotoCoreError, ClientError) as exc:
+                raise RuntimeError(f"Could not save the project to Cloudflare R2: {exc}") from exc
+
+    def load(self, project_id: str) -> dict:
+        validate_project_id(project_id)
+        if self.client:
+            try:
+                response = self.client.get_object(Bucket=self.bucket, Key=self.key(project_id))
+                project = json.loads(response["Body"].read().decode("utf-8"))
+                # Refresh the local cache after a successful remote read.
+                project_path(project_id).write_text(
+                    json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                return project
+            except self.client.exceptions.NoSuchKey:
+                pass
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise RuntimeError(f"Could not read the project from Cloudflare R2: {exc}") from exc
+            except BotoCoreError as exc:
+                raise RuntimeError(f"Could not connect to Cloudflare R2: {exc}") from exc
+
+        path = project_path(project_id)
+        if not path.exists():
+            raise FileNotFoundError(project_id)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def list_projects(self) -> list[dict]:
+        projects_by_id: dict[str, dict] = {}
+
+        if self.client:
+            token = None
+            while True:
+                args = {"Bucket": self.bucket, "Prefix": f"{self.prefix}/", "MaxKeys": 1000}
+                if token:
+                    args["ContinuationToken"] = token
+                try:
+                    result = self.client.list_objects_v2(**args)
+                except (BotoCoreError, ClientError) as exc:
+                    raise RuntimeError(f"Could not list projects from Cloudflare R2: {exc}") from exc
+                for obj in result.get("Contents", []):
+                    key = str(obj.get("Key", ""))
+                    match = re.fullmatch(rf"{re.escape(self.prefix)}/([a-f0-9]{{12}})\.json", key)
+                    if not match:
+                        continue
+                    project_id = match.group(1)
+                    try:
+                        project = self.load(project_id)
+                        projects_by_id[project_id] = project
+                    except Exception:
+                        continue
+                if not result.get("IsTruncated"):
+                    break
+                token = result.get("NextContinuationToken")
+
+        # Include local-only projects when running without R2 or during migration.
+        for path in PROJECT_DIR.glob("*.json"):
+            try:
+                project = json.loads(path.read_text(encoding="utf-8"))
+                projects_by_id.setdefault(project["id"], project)
+            except Exception:
+                continue
+
+        return sorted(projects_by_id.values(), key=lambda p: p.get("updated_at", ""), reverse=True)
+
+
+storage = ProjectStorage()
+
+
 def load_project(project_id: str) -> dict:
-    path = project_path(project_id)
-    if not path.exists():
-        raise FileNotFoundError(project_id)
-    return json.loads(path.read_text(encoding="utf-8"))
+    return storage.load(project_id)
 
 
 def save_project(project: dict) -> None:
     project["updated_at"] = now_iso()
-    project_path(project["id"]).write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding="utf-8")
+    storage.save(project)
 
 
 def normalize_state(value) -> tuple[str, str]:
@@ -157,7 +285,7 @@ def read_counties_excel(path: Path) -> list[dict]:
     str_col = find_column(df_headers, ["str", "sell through rate", "sell-through rate", "sell through", "tasa de venta", "porcentaje de venta", "avg str", "average of str"])
     str_band_cols = {key: find_column(df_headers, aliases) for key, aliases in STR_COLUMN_ALIASES.items()}
     if not county_col or not state_col:
-        raise ValueError("El Excel debe incluir columnas COUNTY/CONDADO y STATE/ESTADO.")
+        raise ValueError("The Excel file must include COUNTY and STATE columns.")
 
     header_index = {str(v or "").strip(): i + 1 for i, v in enumerate(header_values)}
 
@@ -208,25 +336,38 @@ def read_counties_excel(path: Path) -> list[dict]:
             **band_data,
         })
     if not rows:
-        raise ValueError("No se encontraron filas válidas de counties y estados.")
+        raise ValueError("No valid county and state rows were found.")
     return rows
 
 
 @app.get("/")
 def index():
-    projects = []
-    for path in sorted(PROJECT_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-        try:
-            p = json.loads(path.read_text(encoding="utf-8"))
-            projects.append({"id": p["id"], "name": p.get("name", "Mapa"), "updated_at": p.get("updated_at", "")})
-        except Exception:
-            pass
-    return render_template("index.html", projects=projects)
+    storage_error = ""
+    try:
+        raw_projects = storage.list_projects()
+    except RuntimeError as exc:
+        storage_error = str(exc)
+        raw_projects = []
+    projects = [
+        {"id": p["id"], "name": p.get("name", "Map"), "updated_at": p.get("updated_at", "")}
+        for p in raw_projects
+    ]
+    return render_template(
+        "index.html",
+        projects=projects,
+        storage_mode=storage.mode,
+        storage_error=storage_error,
+    )
+
+
+@app.get("/health")
+def health():
+    return jsonify({"ok": True, "storage": storage.mode})
 
 
 @app.post("/projects")
 def create_project():
-    name = (request.form.get("name") or "Mapa de Counties").strip()
+    name = (request.form.get("name") or "County Map").strip()
     project_id = uuid.uuid4().hex[:12]
     project = {
         "id": project_id,
@@ -245,8 +386,8 @@ def map_view(project_id: str):
     try:
         project = load_project(project_id)
     except (FileNotFoundError, ValueError):
-        return "Mapa no encontrado", 404
-    return render_template("map.html", project=project)
+        return "Map not found", 404
+    return render_template("map.html", project=project, storage_mode=storage.mode)
 
 
 @app.get("/api/projects/<project_id>")
@@ -262,7 +403,7 @@ def upload_excel(project_id: str):
     try:
         project = load_project(project_id)
     except (FileNotFoundError, ValueError):
-        return jsonify({"error": "Mapa no encontrado"}), 404
+        return jsonify({"error": "Map not found"}), 404
     file = request.files.get("file")
     if not file or not file.filename:
         return jsonify({"error": "Selecciona un archivo Excel."}), 400
@@ -288,7 +429,7 @@ def save_county_note(project_id: str):
     try:
         project = load_project(project_id)
     except (FileNotFoundError, ValueError):
-        return jsonify({"error": "Mapa no encontrado"}), 404
+        return jsonify({"error": "Map not found"}), 404
 
     data = request.get_json(silent=True) or {}
     state_fips = str(data.get("state_fips", "")).strip()
@@ -326,7 +467,7 @@ def save_drawings(project_id: str):
     try:
         project = load_project(project_id)
     except (FileNotFoundError, ValueError):
-        return jsonify({"error": "Mapa no encontrado"}), 404
+        return jsonify({"error": "Map not found"}), 404
     data = request.get_json(silent=True) or {}
     drawings = data.get("drawings")
     if not isinstance(drawings, dict) or drawings.get("type") != "FeatureCollection":

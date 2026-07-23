@@ -1,4 +1,43 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mapas de Counties</title><style>body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;color:#17212b}.wrap{max-width:850px;margin:55px auto;padding:0 20px}.card{background:#fff;border-radius:14px;padding:25px;box-shadow:0 8px 28px #0002;margin-bottom:20px}input,button{font:inherit;padding:11px;border-radius:7px;border:1px solid #bbc3cc}input{width:min(430px,70%)}button{background:#1769aa;color:#fff;border:0;cursor:pointer}a{color:#1769aa;text-decoration:none}.item{padding:13px 0;border-top:1px solid #e4e8ec;display:flex;justify-content:space-between;gap:15px}</style></head>
-<body><div class="wrap"><div class="card"><h1>Mapa colaborativo de counties</h1><p>Crea un mapa, carga un Excel y comparte el enlace para ver counties y dibujar zonas en tiempo real.</p><form method="post" action="/projects"><input name="name" placeholder="Nombre del mapa" required><button>Crear mapa</button></form></div>
-<div class="card"><h2>Mapas existentes</h2>{% if projects %}{% for p in projects %}<div class="item"><span>{{p.name}}</span><a href="/map/{{p.id}}">Abrir mapa</a></div>{% endfor %}{% else %}<p>Aún no hay mapas.</p>{% endif %}</div></div></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>County Map Generator</title>
+  <style>
+    body{font-family:Arial,sans-serif;background:#f3f5f7;margin:0;color:#17212b}
+    .wrap{max-width:850px;margin:55px auto;padding:0 20px}
+    .card{background:#fff;border-radius:14px;padding:25px;box-shadow:0 8px 28px #0002;margin-bottom:20px}
+    input,button{font:inherit;padding:11px;border-radius:7px;border:1px solid #bbc3cc}
+    input{width:min(430px,70%)}button{background:#1769aa;color:#fff;border:0;cursor:pointer}
+    a{color:#1769aa;text-decoration:none}.item{padding:13px 0;border-top:1px solid #e4e8ec;display:flex;justify-content:space-between;gap:15px}
+    .storage{display:inline-block;padding:6px 10px;border-radius:999px;font-size:13px;font-weight:700;margin-bottom:10px}
+    .storage.r2{background:#dcfce7;color:#166534}.storage.local{background:#fef3c7;color:#92400e}
+    .error{background:#fee2e2;color:#991b1b;padding:12px;border-radius:8px;margin:12px 0}
+    .hint{font-size:13px;color:#52606d}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="storage {{ storage_mode }}">
+      {% if storage_mode == 'r2' %}✓ Permanent R2 storage is active{% else %}⚠ Local mode: maps may be deleted when Render restarts{% endif %}
+    </div>
+    {% if storage_error %}<div class="error">{{ storage_error }}</div>{% endif %}
+    <h1>County Map Generator</h1>
+    <p>Create a map, upload an Excel file, and share the permanent link for collaborative viewing and drawing.</p>
+    <form method="post" action="/projects">
+      <input name="name" placeholder="Map name" required>
+      <button>Create Map</button>
+    </form>
+    {% if storage_mode != 'r2' %}<p class="hint">Configure the R2 environment variables in Render before creating maps you want to keep permanently.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>My Maps</h2>
+    {% if projects %}
+      {% for p in projects %}<div class="item"><span>{{p.name}}</span><a href="/map/{{p.id}}">Open Map</a></div>{% endfor %}
+    {% else %}<p>No maps have been created yet.</p>{% endif %}
+  </div>
+</div>
+</body>
+</html>
