@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import os
 import re
 import uuid
@@ -22,8 +23,12 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
 PROJECT_DIR = DATA_DIR / "projects"
 UPLOAD_DIR = DATA_DIR / "uploads"
+PROPERTY_DIR = DATA_DIR / "property_points"
+PROPERTY_RECORD_DIR = DATA_DIR / "property_records"
 PROJECT_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+PROPERTY_DIR.mkdir(parents=True, exist_ok=True)
+PROPERTY_RECORD_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "local-development-secret")
@@ -51,7 +56,7 @@ STATE_NAMES = {
 }
 
 
-PROJECT_SCHEMA_VERSION = 5
+PROJECT_SCHEMA_VERSION = 7
 
 
 def migrate_project(project: dict) -> tuple[dict, bool]:
@@ -63,6 +68,7 @@ def migrate_project(project: dict) -> tuple[dict, bool]:
     version = int(project.get("schema_version") or 1)
     project.setdefault("counties", [])
     project.setdefault("drawings", {"type": "FeatureCollection", "features": []})
+    project.setdefault("property_analytics", {"loaded": False, "source_files": [], "total_properties": 0, "states": []})
 
     drawings = project.get("drawings")
     if not isinstance(drawings, dict) or drawings.get("type") != "FeatureCollection":
@@ -96,12 +102,16 @@ def migrate_project(project: dict) -> tuple[dict, bool]:
         "str_min": None,
         "str_max": None,
         "search_filter": "",
+        "color_metric": "str_value",
+        "property_color_mode": "automatic",
+        "property_thresholds": [25, 100, 250, 500],
         "layers": {
             "counties": True,
             "county_labels": True,
             "str_colors": True,
             "drawings": True,
             "drawing_labels": True,
+            "property_points": True,
         },
     }
     settings = project.setdefault("view_settings", {})
@@ -228,6 +238,68 @@ class ProjectStorage:
             except (BotoCoreError, ClientError) as exc:
                 raise RuntimeError(f"Could not delete the project from Cloudflare R2: {exc}") from exc
 
+    def property_key(self, project_id: str) -> str:
+        validate_project_id(project_id)
+        return f"property_points/{project_id}.json.gz"
+
+    def save_property_points(self, project_id: str, points: list[dict]) -> None:
+        validate_project_id(project_id)
+        payload = gzip.compress(json.dumps(points, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), compresslevel=6)
+        local = PROPERTY_DIR / f"{project_id}.json.gz"
+        local.write_bytes(payload)
+        if self.client:
+            self.client.put_object(Bucket=self.bucket, Key=self.property_key(project_id), Body=payload, ContentType="application/json", ContentEncoding="gzip", CacheControl="no-store")
+
+    def load_property_points(self, project_id: str) -> list[dict]:
+        validate_project_id(project_id)
+        payload = None
+        if self.client:
+            try:
+                response = self.client.get_object(Bucket=self.bucket, Key=self.property_key(project_id))
+                payload = response["Body"].read()
+                (PROPERTY_DIR / f"{project_id}.json.gz").write_bytes(payload)
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+        if payload is None:
+            local = PROPERTY_DIR / f"{project_id}.json.gz"
+            if not local.exists():
+                return []
+            payload = local.read_bytes()
+        return json.loads(gzip.decompress(payload).decode("utf-8"))
+
+    def property_records_key(self, project_id: str) -> str:
+        validate_project_id(project_id)
+        return f"property_records/{project_id}.json.gz"
+
+    def save_property_records(self, project_id: str, records: list[dict]) -> None:
+        validate_project_id(project_id)
+        payload = gzip.compress(json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), compresslevel=6)
+        local = PROPERTY_RECORD_DIR / f"{project_id}.json.gz"
+        local.write_bytes(payload)
+        if self.client:
+            self.client.put_object(Bucket=self.bucket, Key=self.property_records_key(project_id), Body=payload, ContentType="application/json", ContentEncoding="gzip", CacheControl="no-store")
+
+    def load_property_records(self, project_id: str) -> list[dict]:
+        validate_project_id(project_id)
+        payload = None
+        if self.client:
+            try:
+                response = self.client.get_object(Bucket=self.bucket, Key=self.property_records_key(project_id))
+                payload = response["Body"].read()
+                (PROPERTY_RECORD_DIR / f"{project_id}.json.gz").write_bytes(payload)
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+        if payload is None:
+            local = PROPERTY_RECORD_DIR / f"{project_id}.json.gz"
+            if not local.exists():
+                return []
+            payload = local.read_bytes()
+        return json.loads(gzip.decompress(payload).decode("utf-8"))
+
     def list_projects(self) -> list[dict]:
         projects_by_id: dict[str, dict] = {}
 
@@ -352,6 +424,9 @@ def merge_existing_notes(new_counties: list[dict], old_counties: list[dict]) -> 
         previous = old_data.get(county_identity(county), {})
         for field in ("notes", "priority", "assigned_to", "next_review"):
             if not str(county.get(field, "")).strip() and previous.get(field):
+                county[field] = previous[field]
+        for field in ("property_count","unique_owner_count","portfolio_owner_count","portfolio_property_count","total_acreage","average_acreage"):
+            if field not in county and field in previous:
                 county[field] = previous[field]
     return new_counties
 
@@ -491,6 +566,303 @@ def read_counties_csv(path: Path) -> list[dict]:
     return rows
 
 
+def _read_tabular_file(path: Path) -> pd.DataFrame:
+    ext = path.suffix.lower()
+    if ext in {".xlsx", ".xlsm"}:
+        return pd.read_excel(path, dtype=object)
+    last = None
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            return pd.read_csv(path, dtype=object, encoding=enc, low_memory=False)
+        except UnicodeDecodeError as exc:
+            last = exc
+    raise ValueError(f"Could not read property file: {last}")
+
+
+def _safe_float(value):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(str(value).replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def _norm_owner_piece(value: str) -> str:
+    text = str(value or "").strip().casefold()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _norm_ref(value: str) -> str:
+    # REF is the authoritative property identifier. Preserve punctuation because
+    # it may be meaningful; only normalize whitespace/case and Excel's numeric .0.
+    text = str(value or "").strip().casefold()
+    if re.fullmatch(r"[-+]?\d+\.0+", text):
+        text = text.split(".", 1)[0]
+    return text
+
+
+def read_property_file(path: Path) -> tuple[list[dict], dict]:
+    """Read an upload into canonical property records.
+
+    REF is the immutable property key.  A future upload with the same REF updates
+    the existing record instead of adding another property.
+    """
+    df = _read_tabular_file(path)
+    state_col = find_column(df, ["state", "property state", "prop state", "estado", "st"])
+    county_col = find_column(df, ["county", "county name", "property county", "condado"])
+    lat_col = find_column(df, ["lat", "latitude", "property lat", "property latitude"])
+    lon_col = find_column(df, ["long", "lon", "longitude", "property long", "property longitude"])
+    acres_col = find_column(df, ["acreage", "acreage final", "acres", "cal acreage", "aggr acreage"])
+    ref_col = find_column(df, ["ref", "property ref", "property_ref", "reference", "reference id"])
+    apn_col = find_column(df, ["apn", "parcel id", "parcel_id", "parcel apn"])
+    first_col = find_column(df, ["first_name", "first name", "owner first", "owner_1_first_n", "owner_1_first"])
+    last_col = find_column(df, ["last_name", "last name", "owner last", "owner_1_last_n", "owner_1_last", "owner name"])
+    address_col = find_column(df, ["mailing address", "mail_addr_n", "mail addr", "owner address", "mail_address"])
+    city_col = find_column(df, ["mailing_city", "mail city", "mail_city_n", "owner city"])
+    mail_state_col = find_column(df, ["mailing_state", "mail state", "mail_state_n", "owner state"])
+    zip_col = find_column(df, ["zipcode", "zip", "mail_zip_5", "mail zip"])
+    if not state_col or not county_col:
+        raise ValueError("Property Analytics requires STATE and COUNTY columns. LAT/LONG are used for point display.")
+    if not ref_col:
+        raise ValueError("Property Analytics now requires a REF column. REF is used as the unique property ID so repeat uploads update instead of duplicate properties.")
+
+    def val(row, col):
+        if not col:
+            return ""
+        v = row.get(col, "")
+        return "" if pd.isna(v) else str(v).strip()
+
+    records_by_ref = {}
+    skipped_no_ref = 0
+    duplicate_refs_in_file = 0
+    for _, row in df.iterrows():
+        ref = val(row, ref_col)
+        if not ref:
+            skipped_no_ref += 1
+            continue
+        ref_key = _norm_ref(ref)
+        if not ref_key:
+            skipped_no_ref += 1
+            continue
+        state, sf = normalize_state(val(row, state_col))
+        county = normalize_county(val(row, county_col))
+        if not sf or not county:
+            continue
+        first, last = val(row, first_col), val(row, last_col)
+        address, city, mst, zc = val(row, address_col), val(row, city_col), val(row, mail_state_col), val(row, zip_col)
+        owner_parts = [_norm_owner_piece(x) for x in (first, last, address, city, mst, zc)]
+        owner_key = "|".join(owner_parts)
+        # Name + mailing address is the owner identity.  City/state/ZIP are retained
+        # in the key as extra protection against common names and bad abbreviations.
+        if not any(owner_parts[:2]) or not owner_parts[2]:
+            owner_key = f"REFOWNER|{ref_key}"
+        record = {
+            "ref": ref,
+            "ref_key": ref_key,
+            "state": state,
+            "state_fips": sf,
+            "county": county,
+            "county_key": county.casefold(),
+            "lat": _safe_float(row.get(lat_col)) if lat_col else None,
+            "lon": _safe_float(row.get(lon_col)) if lon_col else None,
+            "acres": _safe_float(row.get(acres_col)) if acres_col else None,
+            "apn": val(row, apn_col),
+            "owner": (" ".join(x for x in [first, last] if x)).strip() or last,
+            "owner_key": owner_key,
+            "mailing_address": address,
+            "mailing_city": city,
+            "mailing_state": mst,
+            "zipcode": zc,
+        }
+        if ref_key in records_by_ref:
+            duplicate_refs_in_file += 1
+        # Last occurrence in the upload wins, which is deterministic and prevents duplicates.
+        records_by_ref[ref_key] = record
+
+    records = list(records_by_ref.values())
+    if not records:
+        raise ValueError("No valid property rows with REF, STATE, and COUNTY were found.")
+    meta = {
+        "rows_uploaded": int(len(df)),
+        "valid_refs": len(records),
+        "duplicate_refs_in_file": duplicate_refs_in_file,
+        "skipped_no_ref": skipped_no_ref,
+        "states": sorted(set(r["state"] for r in records)),
+    }
+    return records, meta
+
+
+def merge_property_records(existing: list[dict], incoming: list[dict]) -> tuple[list[dict], dict]:
+    """UPSERT property records using REF as the one-and-only property key."""
+    by_ref = {str(r.get("ref_key") or ""): dict(r) for r in existing if r.get("ref_key")}
+    new_count = 0
+    updated_count = 0
+    unchanged_count = 0
+    now = now_iso()
+    for record in incoming:
+        key = record["ref_key"]
+        old = by_ref.get(key)
+        if old is None:
+            record = dict(record)
+            record["first_seen_at"] = now
+            record["last_updated_at"] = now
+            by_ref[key] = record
+            new_count += 1
+        else:
+            preserved_first_seen = old.get("first_seen_at") or now
+            comparable_old = {k: v for k, v in old.items() if k not in {"first_seen_at", "last_updated_at"}}
+            comparable_new = dict(record)
+            record = dict(record)
+            record["first_seen_at"] = preserved_first_seen
+            record["last_updated_at"] = now
+            by_ref[key] = record
+            if comparable_old == comparable_new:
+                unchanged_count += 1
+            else:
+                updated_count += 1
+    merged = sorted(by_ref.values(), key=lambda r: (r.get("state", ""), r.get("county", ""), r.get("ref_key", "")))
+    return merged, {"new": new_count, "updated": updated_count, "unchanged": unchanged_count}
+
+
+def build_property_metrics(records: list[dict]) -> tuple[list[dict], list[dict], dict]:
+    owner_counts = {}
+    for r in records:
+        owner_counts[r["owner_key"]] = owner_counts.get(r["owner_key"], 0) + 1
+    grouped = {}
+    for r in records:
+        k = (r["state_fips"], r["county_key"])
+        g = grouped.setdefault(k, {"state": r["state"], "state_fips": r["state_fips"], "county": r["county"], "county_key": r["county_key"], "rows": [], "owners": set(), "portfolio_owners": set()})
+        g["rows"].append(r)
+        g["owners"].add(r["owner_key"])
+        if owner_counts[r["owner_key"]] > 1:
+            g["portfolio_owners"].add(r["owner_key"])
+    metrics = []
+    for g in grouped.values():
+        acreage = [r["acres"] for r in g["rows"] if r.get("acres") is not None]
+        portfolio_props = sum(1 for r in g["rows"] if owner_counts[r["owner_key"]] > 1)
+        metrics.append({
+            "state": g["state"], "state_fips": g["state_fips"], "county": g["county"], "county_key": g["county_key"],
+            "property_count": len(g["rows"]), "unique_owner_count": len(g["owners"]), "portfolio_owner_count": len(g["portfolio_owners"]),
+            "portfolio_property_count": portfolio_props, "total_acreage": round(sum(acreage), 2), "average_acreage": round(sum(acreage) / len(acreage), 2) if acreage else None,
+        })
+    metrics.sort(key=lambda m: (m["state"], m["county"]))
+    points = []
+    for r in records:
+        if r.get("lat") is None or r.get("lon") is None or not (-90 <= r["lat"] <= 90 and -180 <= r["lon"] <= 180):
+            continue
+        points.append({k: r.get(k) for k in ("ref", "state", "state_fips", "county", "county_key", "lat", "lon", "acres", "apn", "owner")})
+    meta = {
+        "total_properties": len(records),
+        "unique_owners": len(owner_counts),
+        "portfolio_owners": sum(1 for n in owner_counts.values() if n > 1),
+        "point_count": len(points),
+        "states": sorted(set(r["state"] for r in records)),
+        "county_count": len(metrics),
+    }
+    return metrics, points, meta
+
+
+def merge_property_metrics_into_counties(project: dict, metrics: list[dict]) -> list[dict]:
+    counties = project.setdefault("counties", [])
+    metric_fields = ("property_count", "unique_owner_count", "portfolio_owner_count", "portfolio_property_count", "total_acreage", "average_acreage")
+    # Metrics are rebuilt from the complete REF master on every upload, so clear old
+    # analytics first. STR/status/notes/drawings are untouched.
+    for c in counties:
+        for field in metric_fields:
+            c.pop(field, None)
+    by_id = {(c.get("state_fips"), c.get("county_key")): c for c in counties}
+    for m in metrics:
+        key = (m["state_fips"], m["county_key"])
+        c = by_id.get(key)
+        if c is None:
+            c = {"county": m["county"], "county_key": m["county_key"], "state": m["state"], "state_fips": m["state_fips"], "status": "Property data", "date": "", "notes": "", "priority": "", "assigned_to": "", "next_review": "", "str": "", "str_value": None}
+            for band in STR_COLUMN_ALIASES:
+                c[band] = ""
+                c[f"{band}_value"] = None
+            counties.append(c)
+            by_id[key] = c
+        for field in metric_fields:
+            c[field] = m.get(field)
+    counties.sort(key=lambda c: (c.get("state", ""), c.get("county", "")))
+    return counties
+
+
+@app.post("/api/projects/<project_id>/properties")
+def upload_properties(project_id: str):
+    try:
+        project = load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error": "Map not found"}), 404
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "Select a property CSV/Excel file."}), 400
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".csv", ".xlsx", ".xlsm"}:
+        return jsonify({"error": "Use .csv, .xlsx, or .xlsm."}), 400
+    dest = UPLOAD_DIR / f"{project_id}_properties_{secure_filename(file.filename)}"
+    file.save(dest)
+    try:
+        incoming, upload_meta = read_property_file(dest)
+        existing = storage.load_property_records(project_id)
+        master_records, upsert = merge_property_records(existing, incoming)
+        metrics, points, master_meta = build_property_metrics(master_records)
+        storage.save_property_records(project_id, master_records)
+        storage.save_property_points(project_id, points)
+        counties = merge_property_metrics_into_counties(project, metrics)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    analytics = project.setdefault("property_analytics", {})
+    source_files = list(analytics.get("source_files", []))
+    if file.filename not in source_files:
+        source_files.append(file.filename)
+    analytics.update({
+        "loaded": True,
+        "source_files": source_files[-50:],
+        "states": master_meta["states"],
+        "total_properties": master_meta["total_properties"],
+        "unique_owners": master_meta["unique_owners"],
+        "portfolio_owners": master_meta["portfolio_owners"],
+        "county_count": master_meta["county_count"],
+        "point_count": master_meta["point_count"],
+        "last_upload_rows": upload_meta["rows_uploaded"],
+        "last_upload_valid_refs": upload_meta["valid_refs"],
+        "last_upload_new": upsert["new"],
+        "last_upload_updated": upsert["updated"],
+        "last_upload_unchanged": upsert["unchanged"],
+        "last_upload_duplicate_refs": upload_meta["duplicate_refs_in_file"],
+        "last_upload_missing_ref": upload_meta["skipped_no_ref"],
+        "last_upload_at": now_iso(),
+        "property_key": "REF",
+        "owner_key": "normalized owner name + mailing address",
+    })
+    project["counties"] = counties
+    save_project(project)
+    socketio.emit("counties_updated", {"counties": counties, "updated_at": project["updated_at"]}, to=project_id)
+    return jsonify({"ok": True, "counties": counties, "analytics": analytics, "metrics_count": len(metrics), "upload": {**upload_meta, **upsert}})
+
+
+@app.get("/api/projects/<project_id>/property-points")
+def property_points(project_id: str):
+    try: load_project(project_id)
+    except (FileNotFoundError,ValueError): return jsonify({"error":"Map not found"}),404
+    state=(request.args.get("state") or "").upper().strip()
+    try:
+        west=float(request.args.get("west","-180")); south=float(request.args.get("south","-90")); east=float(request.args.get("east","180")); north=float(request.args.get("north","90"))
+    except ValueError: return jsonify({"error":"Invalid bbox"}),400
+    points=storage.load_property_points(project_id)
+    selected=[]
+    for p in points:
+        if state and p.get("state")!=state: continue
+        lat=p.get("lat"); lon=p.get("lon")
+        if lat is None or lon is None or not (south<=lat<=north and west<=lon<=east): continue
+        selected.append(p)
+        if len(selected)>=25000: break
+    return jsonify({"points":selected,"count":len(selected),"truncated":len(selected)>=25000})
+
+
 @app.get("/")
 def index():
     storage_error = ""
@@ -529,8 +901,9 @@ def create_project():
         "counties": [],
         "drawings": {"type": "FeatureCollection", "features": []},
         "view_settings": {
-            "state_filter": "", "str_metric": "str_value", "search_filter": "",
-            "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True},
+            "state_filter": "", "str_metric": "str_value", "search_filter": "", "color_metric": "str_value",
+            "property_color_mode": "automatic", "property_thresholds": [25,100,250,500],
+            "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True, "property_points": True},
         },
     }
     save_project(project)
@@ -676,12 +1049,16 @@ def save_project_settings(project_id: str):
     settings = data.get("view_settings")
     if not isinstance(settings, dict):
         return jsonify({"error": "Invalid settings"}), 400
-    allowed_layers = {"counties", "county_labels", "str_colors", "drawings", "drawing_labels"}
+    allowed_layers = {"counties", "county_labels", "str_colors", "drawings", "drawing_labels", "property_points"}
     clean = {
         "state_filter": str(settings.get("state_filter") or "")[:2].upper(),
         "str_min": settings.get("str_min") if isinstance(settings.get("str_min"), (int, float)) else None,
         "str_max": settings.get("str_max") if isinstance(settings.get("str_max"), (int, float)) else None,
         "search_filter": str(settings.get("search_filter") or "")[:200],
+        "str_metric": str(settings.get("str_metric") or "str_value")[:40],
+        "color_metric": str(settings.get("color_metric") or settings.get("str_metric") or "str_value")[:50],
+        "property_color_mode": "custom" if settings.get("property_color_mode") == "custom" else "automatic",
+        "property_thresholds": [float(x) for x in (settings.get("property_thresholds") or [25,100,250,500])[:4] if isinstance(x,(int,float))],
         "layers": {k: bool((settings.get("layers") or {}).get(k, True)) for k in allowed_layers},
     }
     project["view_settings"] = clean
@@ -718,6 +1095,12 @@ def duplicate_project(project_id: str):
     clone["created_at"] = now_iso()
     clone["updated_at"] = now_iso()
     save_project(clone)
+    try:
+        storage.save_property_records(clone["id"], storage.load_property_records(project_id))
+        storage.save_property_points(clone["id"], storage.load_property_points(project_id))
+    except Exception:
+        # Project duplication should still succeed even if an old map has no property store.
+        pass
     return jsonify({"ok": True, "id": clone["id"], "url": url_for("map_view", project_id=clone["id"])})
 
 
