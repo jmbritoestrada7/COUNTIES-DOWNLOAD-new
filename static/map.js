@@ -32,21 +32,26 @@
   };
   let searchFilter = savedSettings.search_filter || '';
   let layerSettings = Object.assign({ counties:true, county_labels:true, str_colors:true, drawings:true, drawing_labels:true, property_points:true }, savedSettings.layers || {});
+  const DEFAULT_LAYER_ORDER = ['counties','drawings','drawing_labels','county_labels','property_points']; // bottom -> top
+  let layerOrder = Array.isArray(savedSettings.layer_order) ? savedSettings.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k)) : [...DEFAULT_LAYER_ORDER];
+  DEFAULT_LAYER_ORDER.forEach(k=>{ if(!layerOrder.includes(k)) layerOrder.push(k); });
   let settingsTimer = null;
 
   const map = L.map('map', { zoomControl: true }).setView([38.2, -96.5], 4);
+  const PANE_BY_LAYER = {counties:'countiesPane',drawings:'drawingsPane',drawing_labels:'drawingLabelsPane',county_labels:'countyLabelsPane',property_points:'propertyPointsPane'};
+  Object.values(PANE_BY_LAYER).forEach(name=>{ if(!map.getPane(name)) map.createPane(name); });
   const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' });
   const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles &copy; Esri' });
   const topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'Map data &copy; OpenStreetMap contributors, SRTM | Map style &copy; OpenTopoMap' });
   streetLayer.addTo(map);
   L.control.layers({ Streets: streetLayer, Satellite: satelliteLayer, Topographic: topoLayer }, {}, { position: 'topleft', collapsed: false }).addTo(map);
 
-  const countyLayer = L.geoJSON(null, { style: countyStyle, onEachFeature: onEachCounty }).addTo(map);
+  const countyLayer = L.geoJSON(null, { pane:PANE_BY_LAYER.counties, style: countyStyle, onEachFeature: onEachCounty }).addTo(map);
   const countyLabels = L.layerGroup();
   const drawings = new L.FeatureGroup().addTo(map);
   const drawingLabels = L.layerGroup().addTo(map);
   const propertyPoints = L.layerGroup().addTo(map);
-  const pointRenderer = L.canvas({ padding: .4 });
+  const pointRenderer = L.canvas({ padding: .4, pane:PANE_BY_LAYER.property_points });
   let pointFetchSeq = 0;
   let applyingRemote = false;
   map.addControl(new L.Control.Draw({
@@ -55,9 +60,9 @@
       polyline: false,
       marker: false,
       circlemarker: false,
-      circle: { shapeOptions: drawingStyle() },
-      rectangle: { shapeOptions: drawingStyle() },
-      polygon: { allowIntersection: false, shapeOptions: drawingStyle() }
+      circle: { shapeOptions: {...drawingStyle(), pane:PANE_BY_LAYER.drawings} },
+      rectangle: { shapeOptions: {...drawingStyle(), pane:PANE_BY_LAYER.drawings} },
+      polygon: { allowIntersection: false, shapeOptions: {...drawingStyle(), pane:PANE_BY_LAYER.drawings} }
     }
   }));
 
@@ -211,7 +216,7 @@
   function renderCountyLabels() {
     countyLabels.clearLayers();
     if (!layerSettings.county_labels || !layerSettings.counties || map.getZoom() < LABEL_MIN_ZOOM) { if (map.hasLayer(countyLabels)) map.removeLayer(countyLabels); return; }
-    countyLayer.eachLayer(layer => { const hit = countyMatch(layer.feature); if (!visibleCounty(hit)) return; const center = layer.getBounds().getCenter(); countyLabels.addLayer(L.marker(center, { interactive:false, keyboard:false, icon:L.divIcon({ className:'county-name-label', html:`<span>${esc(hit.county)}</span>`, iconSize:null }) })); });
+    countyLayer.eachLayer(layer => { const hit = countyMatch(layer.feature); if (!visibleCounty(hit)) return; const center = layer.getBounds().getCenter(); countyLabels.addLayer(L.marker(center, { pane:PANE_BY_LAYER.county_labels, interactive:false, keyboard:false, icon:L.divIcon({ className:'county-name-label', html:`<span>${esc(hit.county)}</span>`, iconSize:null }) })); });
     if (!map.hasLayer(countyLabels)) countyLabels.addTo(map);
   }
   function filteredCounties() { return counties.filter(visibleCounty); }
@@ -241,7 +246,7 @@
   function fitVisibleCounties() { const bounds=[]; countyLayer.eachLayer(l=>{ const h=countyMatch(l.feature); if (visibleCounty(h)) bounds.push(l.getBounds()); }); if (bounds.length) { const b=bounds[0]; bounds.slice(1).forEach(x=>b.extend(x)); map.fitBounds(b,{padding:[20,20]}); } }
 
   function currentViewSettings() {
-    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings} };
+    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings}, layer_order:[...layerOrder] };
   }
   function setAutosave(text) { const el=document.getElementById('autosaveState'); if(el) el.textContent=text; }
   function queueSettingsSave() {
@@ -254,11 +259,33 @@
       } catch(e) { setAutosave('Save failed'); }
     },500);
   }
+  const LAYER_NAMES = {counties:'Counties',drawings:'Drawn Areas',drawing_labels:'Area Labels',county_labels:'County Labels',property_points:'Property Points'};
+  function applyLayerOrder(){
+    layerOrder.forEach((key,i)=>{ const pane=map.getPane(PANE_BY_LAYER[key]); if(pane) pane.style.zIndex=String(410+i*20); });
+    renderLayerOrderList();
+  }
+  function moveLayerOrder(key,delta){
+    const i=layerOrder.indexOf(key); if(i<0)return; const j=i+delta; if(j<0||j>=layerOrder.length)return;
+    [layerOrder[i],layerOrder[j]]=[layerOrder[j],layerOrder[i]]; applyLayerOrder(); schedulePropertyPoints(); queueSettingsSave();
+  }
+  function renderLayerOrderList(){
+    const box=document.getElementById('layerOrderList'); if(!box)return; box.innerHTML='';
+    [...layerOrder].reverse().forEach(key=>{
+      const row=document.createElement('div'); row.className='layer-order-row';
+      const label=document.createElement('span'); label.textContent=LAYER_NAMES[key]||key;
+      const actions=document.createElement('span'); actions.className='layer-order-actions';
+      const up=document.createElement('button'); up.type='button'; up.className='secondary'; up.textContent='↑'; up.title='Move layer up / draw above'; up.onclick=()=>moveLayerOrder(key,+1);
+      const down=document.createElement('button'); down.type='button'; down.className='secondary'; down.textContent='↓'; down.title='Move layer down / draw below'; down.onclick=()=>moveLayerOrder(key,-1);
+      actions.append(up,down); row.append(label,actions); box.appendChild(row);
+    });
+  }
+
   function applyLayerSettings() {
     document.querySelectorAll('[data-layer]').forEach(box=>{ box.checked=layerSettings[box.dataset.layer] !== false; });
     if (layerSettings.drawings) { if(!map.hasLayer(drawings)) drawings.addTo(map); } else if(map.hasLayer(drawings)) map.removeLayer(drawings);
     if (!layerSettings.drawing_labels && map.hasLayer(drawingLabels)) map.removeLayer(drawingLabels);
     if (!layerSettings.property_points && map.hasLayer(propertyPoints)) map.removeLayer(propertyPoints); else if(layerSettings.property_points && !map.hasLayer(propertyPoints)) propertyPoints.addTo(map);
+    applyLayerOrder();
     refreshCountyStyles(); refreshDrawingLabels(); renderDrawnAreas(); schedulePropertyPoints();
   }
   function applySettingsToInputs() {
@@ -291,14 +318,13 @@
     propertyPoints.clearLayers();
     const info=document.getElementById('propertyAnalyticsStatus');
     if(!layerSettings.property_points){ if(info)info.textContent='Property points hidden.'; return; }
-    if(map.getZoom()<7){ if(info)info.textContent='Zoom to level 7+ to display property points.'; return; }
-    if(!stateFilter){ if(info)info.textContent='Select one state to display property points.'; return; }
+    if(map.getZoom()<5){ if(info)info.textContent='Zoom to level 5+ to display property points.'; return; }
     const b=map.getBounds(), seq=++pointFetchSeq;
     if(info)info.textContent='Loading visible property points…';
     try{
-      const q=new URLSearchParams({state:stateFilter,west:b.getWest(),south:b.getSouth(),east:b.getEast(),north:b.getNorth()});
+      const q=new URLSearchParams({west:b.getWest(),south:b.getSouth(),east:b.getEast(),north:b.getNorth()}); if(stateFilter)q.set('state',stateFilter);
       const r=await fetch(`/api/projects/${projectId}/property-points?${q}`), d=await r.json(); if(seq!==pointFetchSeq)return; if(!r.ok)throw new Error(d.error||'Could not load points');
-      d.points.forEach(p=>{ const marker=L.circleMarker([p.lat,p.lon],{renderer:pointRenderer,radius:propertyPointStyle.size,color:propertyPointStyle.outline_color,weight:propertyPointStyle.outline_width,opacity:Math.min(1,propertyPointStyle.opacity+.15),fillColor:propertyPointStyle.color,fillOpacity:propertyPointStyle.opacity}); marker.bindPopup(`<div class="county-popup"><h3>${esc(p.ref||p.apn||'Property')}</h3><div class="popup-meta"><b>REF:</b> ${esc(p.ref||'N/A')}<br><b>APN:</b> ${esc(p.apn||'N/A')}<br><b>Owner:</b> ${esc(p.owner||'N/A')}<br><b>County:</b> ${esc(p.county)}, ${esc(p.state)}<br><b>Acreage:</b> ${esc(p.acres??'N/A')}</div></div>`); propertyPoints.addLayer(marker); });
+      d.points.forEach(p=>{ const marker=L.circleMarker([p.lat,p.lon],{pane:PANE_BY_LAYER.property_points,renderer:pointRenderer,radius:propertyPointStyle.size,color:propertyPointStyle.outline_color,weight:propertyPointStyle.outline_width,opacity:Math.min(1,propertyPointStyle.opacity+.15),fillColor:propertyPointStyle.color,fillOpacity:propertyPointStyle.opacity}); marker.bindPopup(`<div class="county-popup"><h3>${esc(p.ref||p.apn||'Property')}</h3><div class="popup-meta"><b>REF:</b> ${esc(p.ref||'N/A')}<br><b>APN:</b> ${esc(p.apn||'N/A')}<br><b>Owner:</b> ${esc(p.owner||'N/A')}<br><b>County:</b> ${esc(p.county)}, ${esc(p.state)}<br><b>Acreage:</b> ${esc(p.acres??'N/A')}</div></div>`); propertyPoints.addLayer(marker); });
       if(info)info.textContent=`${d.count.toLocaleString()} visible points${d.truncated?' (25,000 limit in current view)':''}.`;
     }catch(e){ if(info)info.textContent=e.message; }
   }
@@ -334,7 +360,7 @@
       const p = layerMeta(layer);
       if (!layerSettings.drawings || !layerSettings.drawing_labels || p.visible === false) return;
       const center = drawingCenter(layer); if (!center) return;
-      drawingLabels.addLayer(L.marker(center, { interactive:false, keyboard:false, icon:L.divIcon({ className:'area-label', html:`<span>${esc(p.name)}</span>`, iconSize:null }) }));
+      drawingLabels.addLayer(L.marker(center, { pane:PANE_BY_LAYER.drawing_labels, interactive:false, keyboard:false, icon:L.divIcon({ className:'area-label', html:`<span>${esc(p.name)}</span>`, iconSize:null }) }));
     });
     if (layerSettings.drawings && layerSettings.drawing_labels) { if(!map.hasLayer(drawingLabels)) drawingLabels.addTo(map); }
     else if(map.hasLayer(drawingLabels)) map.removeLayer(drawingLabels);
@@ -371,7 +397,7 @@
       layer = L.circle([lat,lng], { ...drawingStyle(p.color), radius:Number(p.radius)||1000 });
       layer.feature = { type:'Feature', properties:{...p} };
     } else {
-      L.geoJSON(feature, { style:drawingStyle(p.color), onEachFeature:(f,l)=>{ layer=l; } });
+      L.geoJSON(feature, { pane:PANE_BY_LAYER.drawings, style:{...drawingStyle(p.color),pane:PANE_BY_LAYER.drawings}, onEachFeature:(f,l)=>{ layer=l; } });
     }
     if (layer) { layerMeta(layer); applyDrawingAppearance(layer); drawings.addLayer(layer); }
   }
@@ -435,7 +461,7 @@
   socket.on('drawings_updated',d=>{if(d.sender!==clientId){replaceDrawings(d.drawings);status.textContent='Another user updated the drawn areas.';}});
   socket.on('counties_updated',d=>{counties=d.counties||[];refreshCountyStyles();status.textContent='The county data was updated by another user.';});
   socket.on('county_note_updated',d=>{if(d.sender!==clientId&&d.county){upsertCounty(d.county);renderAllPanels();status.textContent=`Another user updated ${d.county.county} County.`;map.closePopup();}});
-  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
+  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});if(Array.isArray(v.layer_order)){layerOrder=v.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k));DEFAULT_LAYER_ORDER.forEach(k=>{if(!layerOrder.includes(k))layerOrder.push(k);});}applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
   socket.on('project_renamed',d=>{if(d.name){document.querySelector('.panel h2').textContent=d.name;document.title=d.name;}});
 
   document.getElementById('propertyUploadForm').addEventListener('submit',async e=>{e.preventDefault();const file=document.getElementById('propertyFile').files[0];if(!file)return;const fd=new FormData();fd.append('file',file);status.textContent='Processing property data…';const res=await fetch(`/api/projects/${projectId}/properties`,{method:'POST',body:fd});const data=await res.json();if(!res.ok){status.textContent=data.error||'Error uploading property data';return;}counties=data.counties;window.PROJECT.property_analytics=data.analytics||{};strMetric='property_count';document.getElementById('strMetric').value=strMetric;refreshCountyStyles();fitVisibleCounties();schedulePropertyPoints();const u=data.upload||{};status.textContent=`REF update complete: ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(u.unchanged||0).toLocaleString()} unchanged · ${Number(data.analytics?.total_properties||0).toLocaleString()} total properties.`;});

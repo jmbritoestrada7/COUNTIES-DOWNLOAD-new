@@ -56,7 +56,7 @@ STATE_NAMES = {
 }
 
 
-PROJECT_SCHEMA_VERSION = 8
+PROJECT_SCHEMA_VERSION = 9
 
 
 def migrate_project(project: dict) -> tuple[dict, bool]:
@@ -120,6 +120,7 @@ def migrate_project(project: dict) -> tuple[dict, bool]:
             "drawing_labels": True,
             "property_points": True,
         },
+        "layer_order": ["counties", "drawings", "drawing_labels", "county_labels", "property_points"],
     }
     settings = project.setdefault("view_settings", {})
     for key, value in default_settings.items():
@@ -912,6 +913,7 @@ def create_project():
             "property_color_mode": "automatic", "property_thresholds": [25,100,250,500],
             "property_point_style": {"size": 4, "color": "#22c55e", "opacity": 0.75, "outline_color": "#0f172a", "outline_width": 1},
             "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True, "property_points": True},
+            "layer_order": ["counties", "drawings", "drawing_labels", "county_labels", "property_points"],
         },
     }
     save_project(project)
@@ -1075,7 +1077,12 @@ def save_project_settings(project_id: str):
             "outline_width": max(0.0, min(5.0, float((settings.get("property_point_style") or {}).get("outline_width", 1) or 1))),
         },
         "layers": {k: bool((settings.get("layers") or {}).get(k, True)) for k in allowed_layers},
+        "layer_order": [k for k in (settings.get("layer_order") or ["counties","drawings","drawing_labels","county_labels","property_points"]) if k in {"counties","drawings","drawing_labels","county_labels","property_points"}],
     }
+    # Ensure every reorderable layer exists exactly once.
+    for _k in ["counties","drawings","drawing_labels","county_labels","property_points"]:
+        if _k not in clean["layer_order"]:
+            clean["layer_order"].append(_k)
     project["view_settings"] = clean
     save_project(project)
     socketio.emit("settings_updated", {"view_settings": clean, "sender": data.get("sender")}, to=project_id)
