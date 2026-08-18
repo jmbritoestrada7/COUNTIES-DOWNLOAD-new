@@ -56,7 +56,7 @@ STATE_NAMES = {
 }
 
 
-PROJECT_SCHEMA_VERSION = 7
+PROJECT_SCHEMA_VERSION = 8
 
 
 def migrate_project(project: dict) -> tuple[dict, bool]:
@@ -105,6 +105,13 @@ def migrate_project(project: dict) -> tuple[dict, bool]:
         "color_metric": "str_value",
         "property_color_mode": "automatic",
         "property_thresholds": [25, 100, 250, 500],
+        "property_point_style": {
+            "size": 4,
+            "color": "#22c55e",
+            "opacity": 0.75,
+            "outline_color": "#0f172a",
+            "outline_width": 1,
+        },
         "layers": {
             "counties": True,
             "county_labels": True,
@@ -903,6 +910,7 @@ def create_project():
         "view_settings": {
             "state_filter": "", "str_metric": "str_value", "search_filter": "", "color_metric": "str_value",
             "property_color_mode": "automatic", "property_thresholds": [25,100,250,500],
+            "property_point_style": {"size": 4, "color": "#22c55e", "opacity": 0.75, "outline_color": "#0f172a", "outline_width": 1},
             "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True, "property_points": True},
         },
     }
@@ -1059,6 +1067,13 @@ def save_project_settings(project_id: str):
         "color_metric": str(settings.get("color_metric") or settings.get("str_metric") or "str_value")[:50],
         "property_color_mode": "custom" if settings.get("property_color_mode") == "custom" else "automatic",
         "property_thresholds": [float(x) for x in (settings.get("property_thresholds") or [25,100,250,500])[:4] if isinstance(x,(int,float))],
+        "property_point_style": {
+            "size": max(1.0, min(20.0, float((settings.get("property_point_style") or {}).get("size", 4) or 4))),
+            "color": str((settings.get("property_point_style") or {}).get("color") or "#22c55e")[:20],
+            "opacity": max(0.05, min(1.0, float((settings.get("property_point_style") or {}).get("opacity", 0.75) or 0.75))),
+            "outline_color": str((settings.get("property_point_style") or {}).get("outline_color") or "#0f172a")[:20],
+            "outline_width": max(0.0, min(5.0, float((settings.get("property_point_style") or {}).get("outline_width", 1) or 1))),
+        },
         "layers": {k: bool((settings.get("layers") or {}).get(k, True)) for k in allowed_layers},
     }
     project["view_settings"] = clean

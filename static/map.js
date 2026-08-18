@@ -22,6 +22,14 @@
   let strMetric = savedSettings.color_metric || savedSettings.str_metric || 'str_value';
   let propertyColorMode = savedSettings.property_color_mode || 'automatic';
   let propertyThresholds = Array.isArray(savedSettings.property_thresholds) ? savedSettings.property_thresholds.map(Number) : [25,100,250,500];
+  const savedPointStyle = savedSettings.property_point_style || {};
+  let propertyPointStyle = {
+    size: Number(savedPointStyle.size ?? 4),
+    color: savedPointStyle.color || '#22c55e',
+    opacity: Number(savedPointStyle.opacity ?? .75),
+    outline_color: savedPointStyle.outline_color || '#0f172a',
+    outline_width: Number(savedPointStyle.outline_width ?? 1)
+  };
   let searchFilter = savedSettings.search_filter || '';
   let layerSettings = Object.assign({ counties:true, county_labels:true, str_colors:true, drawings:true, drawing_labels:true, property_points:true }, savedSettings.layers || {});
   let settingsTimer = null;
@@ -233,7 +241,7 @@
   function fitVisibleCounties() { const bounds=[]; countyLayer.eachLayer(l=>{ const h=countyMatch(l.feature); if (visibleCounty(h)) bounds.push(l.getBounds()); }); if (bounds.length) { const b=bounds[0]; bounds.slice(1).forEach(x=>b.extend(x)); map.fitBounds(b,{padding:[20,20]}); } }
 
   function currentViewSettings() {
-    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, search_filter:searchFilter, layers:{...layerSettings} };
+    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings} };
   }
   function setAutosave(text) { const el=document.getElementById('autosaveState'); if(el) el.textContent=text; }
   function queueSettingsSave() {
@@ -259,6 +267,17 @@
     document.getElementById('propertyColorMode').value=propertyColorMode;
     document.querySelectorAll('[data-threshold]').forEach((el,i)=>el.value=propertyThresholds[i] ?? '');
     document.getElementById('stateFilter').value=stateFilter;
+    const show=document.getElementById('showPropertyPoints'); if(show) show.checked=layerSettings.property_points !== false;
+    const size=document.getElementById('pointSize'); if(size) size.value=propertyPointStyle.size;
+    const color=document.getElementById('pointColor'); if(color) color.value=propertyPointStyle.color;
+    const opacity=document.getElementById('pointOpacity'); if(opacity) opacity.value=Math.round(propertyPointStyle.opacity*100);
+    const outline=document.getElementById('pointOutlineColor'); if(outline) outline.value=propertyPointStyle.outline_color;
+    updatePointControlLabels();
+  }
+  function updatePointControlLabels(){
+    const sv=document.getElementById('pointSizeValue'); if(sv) sv.textContent=String(propertyPointStyle.size);
+    const ov=document.getElementById('pointOpacityValue'); if(ov) ov.textContent=String(Math.round(propertyPointStyle.opacity*100));
+    const dot=document.getElementById('pointPreviewDot'); if(dot){ const d=Math.max(6,propertyPointStyle.size*2+2); dot.style.width=`${d}px`; dot.style.height=`${d}px`; dot.style.background=propertyPointStyle.color; dot.style.opacity=propertyPointStyle.opacity; dot.style.borderColor=propertyPointStyle.outline_color; dot.style.borderWidth=`${Math.max(0,propertyPointStyle.outline_width)}px`; }
   }
 
   function updateMetricControls(){
@@ -279,7 +298,7 @@
     try{
       const q=new URLSearchParams({state:stateFilter,west:b.getWest(),south:b.getSouth(),east:b.getEast(),north:b.getNorth()});
       const r=await fetch(`/api/projects/${projectId}/property-points?${q}`), d=await r.json(); if(seq!==pointFetchSeq)return; if(!r.ok)throw new Error(d.error||'Could not load points');
-      d.points.forEach(p=>{ const marker=L.circleMarker([p.lat,p.lon],{renderer:pointRenderer,radius:4,color:'#0f172a',weight:1,fillColor:'#22c55e',fillOpacity:.75}); marker.bindPopup(`<div class="county-popup"><h3>${esc(p.ref||p.apn||'Property')}</h3><div class="popup-meta"><b>REF:</b> ${esc(p.ref||'N/A')}<br><b>APN:</b> ${esc(p.apn||'N/A')}<br><b>Owner:</b> ${esc(p.owner||'N/A')}<br><b>County:</b> ${esc(p.county)}, ${esc(p.state)}<br><b>Acreage:</b> ${esc(p.acres??'N/A')}</div></div>`); propertyPoints.addLayer(marker); });
+      d.points.forEach(p=>{ const marker=L.circleMarker([p.lat,p.lon],{renderer:pointRenderer,radius:propertyPointStyle.size,color:propertyPointStyle.outline_color,weight:propertyPointStyle.outline_width,opacity:Math.min(1,propertyPointStyle.opacity+.15),fillColor:propertyPointStyle.color,fillOpacity:propertyPointStyle.opacity}); marker.bindPopup(`<div class="county-popup"><h3>${esc(p.ref||p.apn||'Property')}</h3><div class="popup-meta"><b>REF:</b> ${esc(p.ref||'N/A')}<br><b>APN:</b> ${esc(p.apn||'N/A')}<br><b>Owner:</b> ${esc(p.owner||'N/A')}<br><b>County:</b> ${esc(p.county)}, ${esc(p.state)}<br><b>Acreage:</b> ${esc(p.acres??'N/A')}</div></div>`); propertyPoints.addLayer(marker); });
       if(info)info.textContent=`${d.count.toLocaleString()} visible points${d.truncated?' (25,000 limit in current view)':''}.`;
     }catch(e){ if(info)info.textContent=e.message; }
   }
@@ -402,7 +421,13 @@
     document.getElementById('stateFilter').value='';
     refreshCountyStyles(); fitVisibleCounties(); schedulePropertyPoints(); queueSettingsSave();
   };
-  document.querySelectorAll('[data-layer]').forEach(box=>box.addEventListener('change',()=>{layerSettings[box.dataset.layer]=box.checked;applyLayerSettings();queueSettingsSave();}));
+  document.querySelectorAll('[data-layer]').forEach(box=>box.addEventListener('change',()=>{layerSettings[box.dataset.layer]=box.checked; if(box.dataset.layer==='property_points'){const show=document.getElementById('showPropertyPoints');if(show)show.checked=box.checked;} applyLayerSettings();queueSettingsSave();}));
+  const showPoints=document.getElementById('showPropertyPoints'); if(showPoints) showPoints.addEventListener('change',()=>{layerSettings.property_points=showPoints.checked; const layerBox=document.querySelector('[data-layer="property_points"]');if(layerBox)layerBox.checked=showPoints.checked;applyLayerSettings();queueSettingsSave();});
+  const pointSize=document.getElementById('pointSize'); if(pointSize) pointSize.addEventListener('input',()=>{propertyPointStyle.size=Number(pointSize.value)||4;updatePointControlLabels();schedulePropertyPoints();queueSettingsSave();});
+  const pointColor=document.getElementById('pointColor'); if(pointColor) pointColor.addEventListener('input',()=>{propertyPointStyle.color=pointColor.value;updatePointControlLabels();schedulePropertyPoints();queueSettingsSave();});
+  const pointOpacity=document.getElementById('pointOpacity'); if(pointOpacity) pointOpacity.addEventListener('input',()=>{propertyPointStyle.opacity=Math.max(.1,Math.min(1,(Number(pointOpacity.value)||75)/100));updatePointControlLabels();schedulePropertyPoints();queueSettingsSave();});
+  const pointOutline=document.getElementById('pointOutlineColor'); if(pointOutline) pointOutline.addEventListener('input',()=>{propertyPointStyle.outline_color=pointOutline.value;updatePointControlLabels();schedulePropertyPoints();queueSettingsSave();});
+  const resetPointStyle=document.getElementById('resetPointStyle'); if(resetPointStyle) resetPointStyle.addEventListener('click',()=>{propertyPointStyle={size:4,color:'#22c55e',opacity:.75,outline_color:'#0f172a',outline_width:1};applySettingsToInputs();schedulePropertyPoints();queueSettingsSave();});
 
   const socket=io();
   socket.on('connect',()=>{socket.emit('join_project',{project_id:projectId});status.textContent='Connected in real time.';});
@@ -410,7 +435,7 @@
   socket.on('drawings_updated',d=>{if(d.sender!==clientId){replaceDrawings(d.drawings);status.textContent='Another user updated the drawn areas.';}});
   socket.on('counties_updated',d=>{counties=d.counties||[];refreshCountyStyles();status.textContent='The county data was updated by another user.';});
   socket.on('county_note_updated',d=>{if(d.sender!==clientId&&d.county){upsertCounty(d.county);renderAllPanels();status.textContent=`Another user updated ${d.county.county} County.`;map.closePopup();}});
-  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
+  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
   socket.on('project_renamed',d=>{if(d.name){document.querySelector('.panel h2').textContent=d.name;document.title=d.name;}});
 
   document.getElementById('propertyUploadForm').addEventListener('submit',async e=>{e.preventDefault();const file=document.getElementById('propertyFile').files[0];if(!file)return;const fd=new FormData();fd.append('file',file);status.textContent='Processing property data…';const res=await fetch(`/api/projects/${projectId}/properties`,{method:'POST',body:fd});const data=await res.json();if(!res.ok){status.textContent=data.error||'Error uploading property data';return;}counties=data.counties;window.PROJECT.property_analytics=data.analytics||{};strMetric='property_count';document.getElementById('strMetric').value=strMetric;refreshCountyStyles();fitVisibleCounties();schedulePropertyPoints();const u=data.upload||{};status.textContent=`REF update complete: ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(u.unchanged||0).toLocaleString()} unchanged · ${Number(data.analytics?.total_properties||0).toLocaleString()} total properties.`;});
