@@ -539,18 +539,35 @@
   const cardSelectAll=document.getElementById('cardSelectAll'); if(cardSelectAll) cardSelectAll.addEventListener('click',()=>{countyCardFields=Object.keys(CARD_FIELDS);renderCountyCardFields();queueSettingsSave();});
   const cardClear=document.getElementById('cardClear'); if(cardClear) cardClear.addEventListener('click',()=>{countyCardFields=[];renderCountyCardFields();queueSettingsSave();});
 
+  async function parseApiResponse(response){
+    const text=await response.text();
+    if(!text){
+      throw new Error(`Server returned an empty response (HTTP ${response.status}). Check Render logs if this repeats.`);
+    }
+    try{return JSON.parse(text);}
+    catch(err){
+      const clean=text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+      throw new Error(`Server returned a non-JSON response (HTTP ${response.status}): ${clean.slice(0,240) || 'no details'}`);
+    }
+  }
+
   async function uploadMarketingActivity(file){
     if(!file)return;
     const box=document.getElementById('marketingActivityStatus'); const fd=new FormData(); fd.append('file',file);
-    if(box)box.textContent='Loading marketing activity…';
+    if(box)box.textContent=`Loading marketing activity (${file.name})…`;
     try{
-      const r=await fetch(`/api/projects/${projectId}/marketing-activity`,{method:'POST',body:fd}),d=await r.json();
-      if(!r.ok)throw new Error(d.error||'Marketing activity upload failed');
+      const r=await fetch(`/api/projects/${projectId}/marketing-activity`,{method:'POST',body:fd});
+      const d=await parseApiResponse(r);
+      if(!r.ok)throw new Error(d.error||`Marketing activity upload failed (HTTP ${r.status})`);
       counties=d.counties||counties; window.PROJECT.marketing_activity=d.analytics||{};
       refreshCountyStyles();
       if(box){const u=d.upload||{};box.textContent=`${Number(u.events||0).toLocaleString()} county/date/channel events read · ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(d.analytics?.events||0).toLocaleString()} stored.`;}
       status.textContent='Marketing activity updated.';
-    }catch(e){if(box)box.textContent=e.message;}
+    }catch(e){
+      console.error('Marketing upload error',e);
+      if(box)box.textContent=e.message||String(e);
+      status.textContent='Marketing activity upload failed.';
+    }
   }
   const marketingActivityForm=document.getElementById('marketingActivityForm'); if(marketingActivityForm) marketingActivityForm.addEventListener('submit',async e=>{e.preventDefault();await uploadMarketingActivity(document.getElementById('marketingActivityFile').files[0]);});
 

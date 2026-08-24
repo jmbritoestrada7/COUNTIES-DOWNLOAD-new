@@ -36,7 +36,7 @@ MARKETING_ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "local-development-secret")
-app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 STATE_FIPS = {
@@ -1070,38 +1070,55 @@ def merge_marketing_activity_into_counties(project: dict, summary: list[dict]) -
 
 @app.post("/api/projects/<project_id>/marketing-activity")
 def upload_marketing_activity(project_id: str):
+    """Upload county marketing activity and ALWAYS return JSON, including unexpected failures."""
     try:
-        project=load_project(project_id)
-    except (FileNotFoundError,ValueError):
-        return jsonify({"error":"Map not found"}),404
-    file=request.files.get("file")
-    if not file or not file.filename:
-        return jsonify({"error":"Select a marketing activity file."}),400
-    if Path(file.filename).suffix.lower() not in {".xlsx",".xlsm",".csv"}:
-        return jsonify({"error":"Use an .xlsx, .xlsm, or .csv file."}),400
-    dest=UPLOAD_DIR / f"{project_id}_marketing_{secure_filename(file.filename)}"
-    file.save(dest)
-    try:
-        incoming,meta=read_marketing_activity_file(dest)
-        existing=storage.load_marketing_activity(project_id)
-        merged,merge_meta=merge_marketing_activity(existing,incoming)
-        storage.save_marketing_activity(project_id,merged)
-        summary=build_marketing_activity_summary(merged)
-        counties=merge_marketing_activity_into_counties(project,summary)
+        try:
+            project = load_project(project_id)
+        except (FileNotFoundError, ValueError):
+            return jsonify({"error": "Map not found"}), 404
+
+        file = request.files.get("file")
+        if not file or not file.filename:
+            return jsonify({"error": "Select a marketing activity file."}), 400
+        if Path(file.filename).suffix.lower() not in {".xlsx", ".xlsm", ".csv"}:
+            return jsonify({"error": "Use an .xlsx, .xlsm, or .csv file."}), 400
+
+        dest = UPLOAD_DIR / f"{project_id}_marketing_{secure_filename(file.filename)}"
+        file.save(dest)
+
+        incoming, meta = read_marketing_activity_file(dest)
+        existing = storage.load_marketing_activity(project_id)
+        merged, merge_meta = merge_marketing_activity(existing, incoming)
+        storage.save_marketing_activity(project_id, merged)
+        summary = build_marketing_activity_summary(merged)
+        counties = merge_marketing_activity_into_counties(project, summary)
+
+        analytics = project.setdefault("marketing_activity", {})
+        source_files = analytics.setdefault("source_files", [])
+        source_files.append({
+            "name": file.filename, "uploaded_at": now_iso(),
+            "rows": meta.get("rows_uploaded"), "events": meta.get("events")
+        })
+        analytics.update({
+            "loaded": True,
+            "states": sorted(set(r.get("state") for r in merged if r.get("state"))),
+            "events": len(merged),
+            "last_upload_at": now_iso(),
+            "last_upload_rows": meta.get("rows_uploaded"),
+            "last_upload_valid": meta.get("valid_rows"),
+            "channels": meta.get("channels", []),
+        })
+        project["counties"] = counties
+        save_project(project)
+        try:
+            socketio.emit("counties_updated", {"counties": counties}, to=project_id)
+        except Exception:
+            # A websocket notification failure must not make a successful upload fail.
+            pass
+        return jsonify({"ok": True, "counties": counties, "analytics": analytics, "upload": {**meta, **merge_meta}})
     except Exception as exc:
-        return jsonify({"error":str(exc)}),400
-    analytics=project.setdefault("marketing_activity",{})
-    files=analytics.setdefault("source_files",[])
-    files.append({"name":file.filename,"uploaded_at":now_iso(),"rows":meta.get("rows_uploaded"),"events":meta.get("events")})
-    analytics.update({
-        "loaded":True,"states":sorted(set(r.get("state") for r in merged if r.get("state"))),
-        "events":len(merged),"last_upload_at":now_iso(),"last_upload_rows":meta.get("rows_uploaded"),
-        "last_upload_valid":meta.get("valid_rows"),"channels":meta.get("channels",[]),
-    })
-    project["counties"]=counties
-    save_project(project)
-    socketio.emit("counties_updated", {"counties":counties}, to=project_id)
-    return jsonify({"ok":True,"counties":counties,"analytics":analytics,"upload":{**meta,**merge_meta}})
+        app.logger.exception("Marketing activity upload failed")
+        return jsonify({"error": f"Marketing activity upload failed: {exc}"}), 400
 
 
 def _market_state_county(row, df):
