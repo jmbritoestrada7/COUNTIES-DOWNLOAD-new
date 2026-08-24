@@ -40,6 +40,13 @@
   let layerSettings = Object.assign({ counties:true, county_labels:true, str_colors:true, drawings:true, drawing_labels:true, property_points:true }, savedSettings.layers || {});
   const DEFAULT_CARD_FIELDS=['average_str','property_count','unique_owner_count','portfolio_owner_count','portfolio_property_count','total_acreage','average_acreage','market_active_count','market_sold_count','market_str','market_avg_active_price','market_avg_sold_price','str_by_acreage','mailer_sent','rvm','ai_texting','cold_calling','neutral_postcard'];
   let countyCardFields=Array.isArray(savedSettings.county_card_fields)?savedSettings.county_card_fields.filter(Boolean):[...DEFAULT_CARD_FIELDS];
+  let marketingFilterChannel=savedSettings.marketing_filter_channel||'';
+  let marketingFilterYear=savedSettings.marketing_filter_year||'';
+  let marketingFilterFrom=savedSettings.marketing_filter_from||'';
+  let marketingFilterTo=savedSettings.marketing_filter_to||'';
+  let marketingOnly=!!savedSettings.marketing_only;
+  let marketingColorByDate=!!savedSettings.marketing_color_by_date;
+  let marketingDateColors=Object.assign({d30:'#16a34a',d90:'#eab308',d180:'#f97316',old:'#dc2626',nodate:'#64748b'},savedSettings.marketing_date_colors||{});
   const DEFAULT_LAYER_ORDER = ['counties','drawings','drawing_labels','county_labels','property_points']; // bottom -> top
   let layerOrder = Array.isArray(savedSettings.layer_order) ? savedSettings.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k)) : [...DEFAULT_LAYER_ORDER];
   DEFAULT_LAYER_ORDER.forEach(k=>{ if(!layerOrder.includes(k)) layerOrder.push(k); });
@@ -126,10 +133,48 @@
   const PROPERTY_COLORS=['#dbeafe','#93c5fd','#60a5fa','#2563eb','#1e3a8a'];
   function propertyColor(value){ if(value===null)return '#64748b'; const t=activePropertyThresholds(); let i=0; while(i<t.length && value>t[i])i++; return PROPERTY_COLORS[Math.min(i,4)]; }
   function metricColor(value){ return isStrMetric() ? strColor(value) : propertyColor(value); }
+  const MARKETING_KEYS=['mailer_sent','rvm','ai_texting','cold_calling','neutral_postcard'];
+  function marketingItems(c,channel){
+    if(!c)return [];
+    const keys=channel?[channel]:MARKETING_KEYS;
+    const out=[];
+    keys.forEach(k=>(c[`marketing_${k}_dates`]||[]).forEach(x=>out.push({channel:k,date:String(x?.date||''),count:Number(x?.count)||0})));
+    return out;
+  }
+  function validMarketingDateText(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||'')); }
+  function marketingDateInRange(dateText){
+    if(!validMarketingDateText(dateText)) return !marketingFilterYear && !marketingFilterFrom && !marketingFilterTo;
+    if(marketingFilterYear && !dateText.startsWith(marketingFilterYear+'-'))return false;
+    if(marketingFilterFrom && dateText<marketingFilterFrom)return false;
+    if(marketingFilterTo && dateText>marketingFilterTo)return false;
+    return true;
+  }
+  function matchingMarketingItems(c){ return marketingItems(c,marketingFilterChannel).filter(x=>marketingDateInRange(x.date)); }
+  function countyHasMatchingMarketing(c){
+    const items=matchingMarketingItems(c);
+    if(items.length)return true;
+    if(marketingFilterYear||marketingFilterFrom||marketingFilterTo)return false;
+    const keys=marketingFilterChannel?[marketingFilterChannel]:MARKETING_KEYS;
+    return keys.some(k=>Number(c?.[`marketing_${k}_count`]||0)>0);
+  }
+  function latestMatchingMarketingDate(c){
+    const dates=matchingMarketingItems(c).map(x=>x.date).filter(validMarketingDateText).sort();
+    return dates.length?dates[dates.length-1]:'';
+  }
+  function dateAgeDays(dateText){
+    if(!validMarketingDateText(dateText))return null;
+    const d=new Date(dateText+'T12:00:00'); if(Number.isNaN(d.getTime()))return null;
+    return Math.max(0,Math.floor((Date.now()-d.getTime())/86400000));
+  }
+  function marketingDateColor(dateText){
+    const days=dateAgeDays(dateText); if(days===null)return marketingDateColors.nodate;
+    if(days<=30)return marketingDateColors.d30; if(days<=90)return marketingDateColors.d90; if(days<=180)return marketingDateColors.d180; return marketingDateColors.old;
+  }
   function visibleCounty(c) {
     if (!c) return false;
     if (stateFilter && c.state !== stateFilter) return false;
     if (searchFilter && !`${c.county} ${c.state}`.toLowerCase().includes(searchFilter)) return false;
+    if (marketingOnly && !countyHasMatchingMarketing(c)) return false;
     return true;
   }
   function countyMatch(feature) {
@@ -149,7 +194,7 @@
   function countyStyle(feature) {
     const hit = countyMatch(feature);
     if (!layerSettings.counties || !hit || !visibleCounty(hit)) return { color:'#64748b', weight:.25, opacity:0, fillOpacity:0, fillColor:'#cbd5e1' };
-    const color = layerSettings.str_colors ? metricColor(numericMetric(hit)) : '#2f855a';
+    const color = marketingColorByDate ? marketingDateColor(latestMatchingMarketingDate(hit)) : (layerSettings.str_colors ? metricColor(numericMetric(hit)) : '#2f855a');
     return { color, weight:1.5, opacity:1, fillOpacity:.58, fillColor:color };
   }
   function strRows(hit) {
@@ -185,8 +230,17 @@
     </tbody></table>`;
   }
   function marketingDatesHtml(items){
-    if(!Array.isArray(items)||!items.length)return '<span>No dates</span>';
-    return items.map(x=>`<span>${esc(x.date||'Undated')}${Number(x.count)>0?` (${Number(x.count).toLocaleString()})`:''}</span>`).join(' · ');
+    if(!Array.isArray(items)||!items.length)return '<span class="marketing-date-pill">No dates</span>';
+    return items.map(x=>{const dt=String(x.date||'');const bg=marketingDateColor(dt);return `<span class="marketing-date-pill" style="background:${bg}22;border-color:${bg};color:${bg}">${esc(dt||'Undated')}${Number(x.count)>0?` (${Number(x.count).toLocaleString()})`:''}</span>`;}).join('');
+  }
+  function marketingYearSummary(items){
+    if(!Array.isArray(items)||!items.length)return '';
+    const year=String(marketingFilterYear||new Date().getFullYear());
+    const rows=items.filter(x=>String(x.date||'').startsWith(year+'-'));
+    const uniqueDates=new Set(rows.map(x=>String(x.date||'')).filter(Boolean));
+    const total=rows.reduce((a,x)=>a+(Number(x.count)||0),0);
+    if(!uniqueDates.size)return `<div class="marketing-year-summary">${esc(year)}: 0 sends</div>`;
+    return `<div class="marketing-year-summary">${esc(year)}: ${uniqueDates.size.toLocaleString()} send${uniqueDates.size===1?'':'s'} · ${total.toLocaleString()} total contacts/items</div>`;
   }
   function cardRow(label,value,detail=''){
     return `<tr><td>${esc(label)}</td><td><b>${value}</b>${detail?`<div class="marketing-dates">${detail}</div>`:''}</td></tr>`;
@@ -211,7 +265,7 @@
     const marketing=[
       ['mailer_sent','Mailer Sent'],['rvm','RVM'],['ai_texting','AI Texting'],['cold_calling','Cold Calling'],['neutral_postcard','Neutral Postcard']
     ];
-    marketing.forEach(([key,label])=>{if(selected.has(key)){const count=hit[`marketing_${key}_count`];const dates=hit[`marketing_${key}_dates`];rows.push(cardRow(label,num(count),marketingDatesHtml(dates)));}});
+    marketing.forEach(([key,label])=>{if(selected.has(key)){const count=hit[`marketing_${key}_count`];const dates=hit[`marketing_${key}_dates`];rows.push(cardRow(label,num(count),marketingDatesHtml(dates)+marketingYearSummary(dates)));}});
     if(selected.has('status')) rows.push(cardRow('Status',esc(hit.status||'Active'),hit.date?`Date: ${esc(hit.date)}`:''));
     let html=rows.length?`<div class="card-section-title">Selected County Data</div><table class="str-table"><tbody>${rows.join('')}</tbody></table>`:'<div class="empty-str">No county-card fields selected.</div>';
     if(selected.has('str_by_acreage')) html+=`<div class="card-section-title">STR by Acreage</div>${strRows(hit)}`;
@@ -313,12 +367,12 @@
     const states = [...new Set(counties.map(c=>c.state).filter(Boolean))].sort();
     select.innerHTML = '<option value="">All states</option>' + states.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join(''); select.value = current;
   }
-  function renderAllPanels() { renderStateOptions(); renderStats(); renderCountyList(); renderDrawnAreas(); updateMetricControls(); const legend=document.getElementById('legendMetric'); if(legend) legend.textContent=metricInfo().label; }
+  function renderAllPanels() { renderStateOptions(); renderMarketingYearOptions(); renderMarketingDateLegend(); renderStats(); renderCountyList(); renderDrawnAreas(); updateMetricControls(); const legend=document.getElementById('legendMetric'); if(legend) legend.textContent=metricInfo().label; }
   function zoomToCounty(target) { if (!target) return; let found; countyLayer.eachLayer(l => { const h=countyMatch(l.feature); if (h && h.state_fips===target.state_fips && h.county_key===target.county_key) found=l; }); if (found) { map.fitBounds(found.getBounds(), {padding:[35,35],maxZoom:9}); setTimeout(()=>found.fire('click'),250); } }
   function fitVisibleCounties() { const bounds=[]; countyLayer.eachLayer(l=>{ const h=countyMatch(l.feature); if (visibleCounty(h)) bounds.push(l.getBounds()); }); if (bounds.length) { const b=bounds[0]; bounds.slice(1).forEach(x=>b.extend(x)); map.fitBounds(b,{padding:[20,20]}); } }
 
   function currentViewSettings() {
-    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings}, layer_order:[...layerOrder], county_card_fields:[...countyCardFields] };
+    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings}, layer_order:[...layerOrder], county_card_fields:[...countyCardFields], marketing_filter_channel:marketingFilterChannel, marketing_filter_year:marketingFilterYear, marketing_filter_from:marketingFilterFrom, marketing_filter_to:marketingFilterTo, marketing_only:marketingOnly, marketing_color_by_date:marketingColorByDate, marketing_date_colors:{...marketingDateColors} };
   }
   function setAutosave(text) { const el=document.getElementById('autosaveState'); if(el) el.textContent=text; }
   function queueSettingsSave() {
@@ -368,6 +422,27 @@
       queueSettingsSave();
     }));
   }
+  function marketingYears(){
+    const years=new Set(); counties.forEach(c=>MARKETING_KEYS.forEach(k=>(c[`marketing_${k}_dates`]||[]).forEach(x=>{const d=String(x?.date||'');if(/^\d{4}-/.test(d))years.add(d.slice(0,4));})));
+    return [...years].sort((a,b)=>Number(b)-Number(a));
+  }
+  function renderMarketingYearOptions(){
+    const el=document.getElementById('marketingFilterYear'); if(!el)return;
+    const years=marketingYears(); el.innerHTML='<option value="">Any year</option>'+years.map(y=>`<option value="${esc(y)}">${esc(y)}</option>`).join(''); el.value=marketingFilterYear;
+  }
+  function renderMarketingDateLegend(){
+    const box=document.getElementById('marketingDateLegend');if(!box)return;
+    box.innerHTML=`<span class="dot" style="background:${marketingDateColors.d30}"></span>0–30 days &nbsp; <span class="dot" style="background:${marketingDateColors.d90}"></span>31–90 &nbsp; <span class="dot" style="background:${marketingDateColors.d180}"></span>91–180 &nbsp; <span class="dot" style="background:${marketingDateColors.old}"></span>181+`;
+  }
+  function applyMarketingFilterInputs(){
+    const set=(id,val)=>{const e=document.getElementById(id);if(e)e.value=val||'';};
+    set('marketingFilterChannel',marketingFilterChannel); renderMarketingYearOptions(); set('marketingFilterFrom',marketingFilterFrom); set('marketingFilterTo',marketingFilterTo);
+    const only=document.getElementById('marketingOnly');if(only)only.checked=marketingOnly;
+    const cbd=document.getElementById('marketingColorByDate');if(cbd)cbd.checked=marketingColorByDate;
+    const colors={marketingColor30:'d30',marketingColor90:'d90',marketingColor180:'d180',marketingColorOld:'old'};Object.entries(colors).forEach(([id,k])=>{const e=document.getElementById(id);if(e)e.value=marketingDateColors[k];});
+    renderMarketingDateLegend();
+  }
+  function marketingFilterChanged(){ refreshCountyStyles(); renderAllPanels(); queueSettingsSave(); }
   function applySettingsToInputs() {
     document.getElementById('countySearch').value=searchFilter;
     document.getElementById('strMetric').value=strMetric;
@@ -379,6 +454,7 @@
     const color=document.getElementById('pointColor'); if(color) color.value=propertyPointStyle.color;
     const opacity=document.getElementById('pointOpacity'); if(opacity) opacity.value=Math.round(propertyPointStyle.opacity*100);
     const outline=document.getElementById('pointOutlineColor'); if(outline) outline.value=propertyPointStyle.outline_color;
+    applyMarketingFilterInputs();
     updatePointControlLabels();
     renderCountyCardFields();
   }
@@ -536,6 +612,14 @@
   const pointOutline=document.getElementById('pointOutlineColor'); if(pointOutline) pointOutline.addEventListener('input',()=>{propertyPointStyle.outline_color=pointOutline.value;updatePointControlLabels();schedulePropertyPoints();queueSettingsSave();});
   const resetPointStyle=document.getElementById('resetPointStyle'); if(resetPointStyle) resetPointStyle.addEventListener('click',()=>{propertyPointStyle={size:4,color:'#22c55e',opacity:.75,outline_color:'#0f172a',outline_width:1};applySettingsToInputs();schedulePropertyPoints();queueSettingsSave();});
 
+  const mfChannel=document.getElementById('marketingFilterChannel'); if(mfChannel)mfChannel.addEventListener('change',()=>{marketingFilterChannel=mfChannel.value;marketingFilterChanged();});
+  const mfYear=document.getElementById('marketingFilterYear'); if(mfYear)mfYear.addEventListener('change',()=>{marketingFilterYear=mfYear.value;marketingFilterChanged();});
+  const mfFrom=document.getElementById('marketingFilterFrom'); if(mfFrom)mfFrom.addEventListener('change',()=>{marketingFilterFrom=mfFrom.value;marketingFilterChanged();});
+  const mfTo=document.getElementById('marketingFilterTo'); if(mfTo)mfTo.addEventListener('change',()=>{marketingFilterTo=mfTo.value;marketingFilterChanged();});
+  const mfOnly=document.getElementById('marketingOnly'); if(mfOnly)mfOnly.addEventListener('change',()=>{marketingOnly=mfOnly.checked;marketingFilterChanged();});
+  const mfColor=document.getElementById('marketingColorByDate'); if(mfColor)mfColor.addEventListener('change',()=>{marketingColorByDate=mfColor.checked;marketingFilterChanged();});
+  [['marketingColor30','d30'],['marketingColor90','d90'],['marketingColor180','d180'],['marketingColorOld','old']].forEach(([id,k])=>{const e=document.getElementById(id);if(e)e.addEventListener('input',()=>{marketingDateColors[k]=e.value;renderMarketingDateLegend();refreshCountyStyles();queueSettingsSave();});});
+  const clearMF=document.getElementById('clearMarketingFilter'); if(clearMF)clearMF.addEventListener('click',()=>{marketingFilterChannel='';marketingFilterYear='';marketingFilterFrom='';marketingFilterTo='';marketingOnly=false;marketingColorByDate=false;applyMarketingFilterInputs();marketingFilterChanged();});
   const cardSelectAll=document.getElementById('cardSelectAll'); if(cardSelectAll) cardSelectAll.addEventListener('click',()=>{countyCardFields=Object.keys(CARD_FIELDS);renderCountyCardFields();queueSettingsSave();});
   const cardClear=document.getElementById('cardClear'); if(cardClear) cardClear.addEventListener('click',()=>{countyCardFields=[];renderCountyCardFields();queueSettingsSave();});
 
@@ -559,7 +643,7 @@
       const r=await fetch(`/api/projects/${projectId}/marketing-activity`,{method:'POST',body:fd});
       const d=await parseApiResponse(r);
       if(!r.ok)throw new Error(d.error||`Marketing activity upload failed (HTTP ${r.status})`);
-      counties=d.counties||counties; window.PROJECT.marketing_activity=d.analytics||{};
+      counties=d.counties||counties; window.PROJECT.marketing_activity=d.analytics||{}; applyMarketingFilterInputs();
       refreshCountyStyles();
       if(box){const u=d.upload||{};box.textContent=`${Number(u.events||0).toLocaleString()} county/date/channel events read · ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(d.analytics?.events||0).toLocaleString()} stored.`;}
       status.textContent='Marketing activity updated.';
@@ -610,7 +694,7 @@
   socket.on('drawings_updated',d=>{if(d.sender!==clientId){replaceDrawings(d.drawings);status.textContent='Another user updated the drawn areas.';}});
   socket.on('counties_updated',d=>{counties=d.counties||[];refreshCountyStyles();status.textContent='The county data was updated by another user.';});
   socket.on('county_note_updated',d=>{if(d.sender!==clientId&&d.county){upsertCounty(d.county);renderAllPanels();status.textContent=`Another user updated ${d.county.county} County.`;map.closePopup();}});
-  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});if(Array.isArray(v.layer_order)){layerOrder=v.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k));DEFAULT_LAYER_ORDER.forEach(k=>{if(!layerOrder.includes(k))layerOrder.push(k);});}if(Array.isArray(v.county_card_fields))countyCardFields=v.county_card_fields.filter(k=>CARD_FIELDS[k]);applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
+  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});if(Array.isArray(v.layer_order)){layerOrder=v.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k));DEFAULT_LAYER_ORDER.forEach(k=>{if(!layerOrder.includes(k))layerOrder.push(k);});}if(Array.isArray(v.county_card_fields))countyCardFields=v.county_card_fields.filter(k=>CARD_FIELDS[k]);marketingFilterChannel=v.marketing_filter_channel||'';marketingFilterYear=v.marketing_filter_year||'';marketingFilterFrom=v.marketing_filter_from||'';marketingFilterTo=v.marketing_filter_to||'';marketingOnly=!!v.marketing_only;marketingColorByDate=!!v.marketing_color_by_date;if(v.marketing_date_colors)marketingDateColors=Object.assign(marketingDateColors,v.marketing_date_colors);applySettingsToInputs();applyLayerSettings();refreshCountyStyles();status.textContent='Another user updated the map view.';}});
   socket.on('project_renamed',d=>{if(d.name){document.querySelector('.panel h2').textContent=d.name;document.title=d.name;}});
 
   document.getElementById('propertyUploadForm').addEventListener('submit',async e=>{e.preventDefault();const file=document.getElementById('propertyFile').files[0];if(!file)return;const fd=new FormData();fd.append('file',file);status.textContent='Processing property data…';const res=await fetch(`/api/projects/${projectId}/properties`,{method:'POST',body:fd});const data=await res.json();if(!res.ok){status.textContent=data.error||'Error uploading property data';return;}counties=data.counties;window.PROJECT.property_analytics=data.analytics||{};strMetric='property_count';document.getElementById('strMetric').value=strMetric;refreshCountyStyles();fitVisibleCounties();schedulePropertyPoints();const u=data.upload||{};status.textContent=`REF update complete: ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(u.unchanged||0).toLocaleString()} unchanged · ${Number(data.analytics?.total_properties||0).toLocaleString()} total properties.`;});
