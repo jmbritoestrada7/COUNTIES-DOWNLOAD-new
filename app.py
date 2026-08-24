@@ -25,10 +25,14 @@ PROJECT_DIR = DATA_DIR / "projects"
 UPLOAD_DIR = DATA_DIR / "uploads"
 PROPERTY_DIR = DATA_DIR / "property_points"
 PROPERTY_RECORD_DIR = DATA_DIR / "property_records"
+MARKET_RECORD_DIR = DATA_DIR / "market_records"
+MARKETING_ACTIVITY_DIR = DATA_DIR / "marketing_activity"
 PROJECT_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PROPERTY_DIR.mkdir(parents=True, exist_ok=True)
 PROPERTY_RECORD_DIR.mkdir(parents=True, exist_ok=True)
+MARKET_RECORD_DIR.mkdir(parents=True, exist_ok=True)
+MARKETING_ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "local-development-secret")
@@ -56,7 +60,7 @@ STATE_NAMES = {
 }
 
 
-PROJECT_SCHEMA_VERSION = 9
+PROJECT_SCHEMA_VERSION = 11
 
 
 def migrate_project(project: dict) -> tuple[dict, bool]:
@@ -69,6 +73,8 @@ def migrate_project(project: dict) -> tuple[dict, bool]:
     project.setdefault("counties", [])
     project.setdefault("drawings", {"type": "FeatureCollection", "features": []})
     project.setdefault("property_analytics", {"loaded": False, "source_files": [], "total_properties": 0, "states": []})
+    project.setdefault("market_analytics", {"loaded": False, "active_files": [], "sold_files": [], "active_count": 0, "sold_count": 0, "states": []})
+    project.setdefault("marketing_activity", {"loaded": False, "source_files": [], "states": [], "events": 0})
 
     drawings = project.get("drawings")
     if not isinstance(drawings, dict) or drawings.get("type") != "FeatureCollection":
@@ -121,6 +127,12 @@ def migrate_project(project: dict) -> tuple[dict, bool]:
             "property_points": True,
         },
         "layer_order": ["counties", "drawings", "drawing_labels", "county_labels", "property_points"],
+        "county_card_fields": [
+            "average_str","property_count","unique_owner_count","portfolio_owner_count","portfolio_property_count",
+            "total_acreage","average_acreage","market_active_count","market_sold_count","market_str",
+            "market_avg_active_price","market_avg_sold_price","str_by_acreage",
+            "mailer_sent","rvm","ai_texting","cold_calling","neutral_postcard"
+        ],
     }
     settings = project.setdefault("view_settings", {})
     for key, value in default_settings.items():
@@ -308,6 +320,68 @@ class ProjectStorage:
             payload = local.read_bytes()
         return json.loads(gzip.decompress(payload).decode("utf-8"))
 
+    def market_records_key(self, project_id: str) -> str:
+        validate_project_id(project_id)
+        return f"market_records/{project_id}.json.gz"
+
+    def save_market_records(self, project_id: str, records: list[dict]) -> None:
+        validate_project_id(project_id)
+        payload = gzip.compress(json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), compresslevel=6)
+        local = MARKET_RECORD_DIR / f"{project_id}.json.gz"
+        local.write_bytes(payload)
+        if self.client:
+            self.client.put_object(Bucket=self.bucket, Key=self.market_records_key(project_id), Body=payload, ContentType="application/json", ContentEncoding="gzip", CacheControl="no-store")
+
+    def load_market_records(self, project_id: str) -> list[dict]:
+        validate_project_id(project_id)
+        payload = None
+        if self.client:
+            try:
+                response = self.client.get_object(Bucket=self.bucket, Key=self.market_records_key(project_id))
+                payload = response["Body"].read()
+                (MARKET_RECORD_DIR / f"{project_id}.json.gz").write_bytes(payload)
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+        if payload is None:
+            local = MARKET_RECORD_DIR / f"{project_id}.json.gz"
+            if not local.exists():
+                return []
+            payload = local.read_bytes()
+        return json.loads(gzip.decompress(payload).decode("utf-8"))
+
+    def marketing_activity_key(self, project_id: str) -> str:
+        validate_project_id(project_id)
+        return f"marketing_activity/{project_id}.json.gz"
+
+    def save_marketing_activity(self, project_id: str, records: list[dict]) -> None:
+        validate_project_id(project_id)
+        payload = gzip.compress(json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), compresslevel=6)
+        local = MARKETING_ACTIVITY_DIR / f"{project_id}.json.gz"
+        local.write_bytes(payload)
+        if self.client:
+            self.client.put_object(Bucket=self.bucket, Key=self.marketing_activity_key(project_id), Body=payload, ContentType="application/json", ContentEncoding="gzip", CacheControl="no-store")
+
+    def load_marketing_activity(self, project_id: str) -> list[dict]:
+        validate_project_id(project_id)
+        payload = None
+        if self.client:
+            try:
+                response = self.client.get_object(Bucket=self.bucket, Key=self.marketing_activity_key(project_id))
+                payload = response["Body"].read()
+                (MARKETING_ACTIVITY_DIR / f"{project_id}.json.gz").write_bytes(payload)
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code not in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+        if payload is None:
+            local = MARKETING_ACTIVITY_DIR / f"{project_id}.json.gz"
+            if not local.exists():
+                return []
+            payload = local.read_bytes()
+        return json.loads(gzip.decompress(payload).decode("utf-8"))
+
     def list_projects(self) -> list[dict]:
         projects_by_id: dict[str, dict] = {}
 
@@ -433,7 +507,10 @@ def merge_existing_notes(new_counties: list[dict], old_counties: list[dict]) -> 
         for field in ("notes", "priority", "assigned_to", "next_review"):
             if not str(county.get(field, "")).strip() and previous.get(field):
                 county[field] = previous[field]
-        for field in ("property_count","unique_owner_count","portfolio_owner_count","portfolio_property_count","total_acreage","average_acreage"):
+        preserve_fields = ["property_count","unique_owner_count","portfolio_owner_count","portfolio_property_count","total_acreage","average_acreage"]
+        for ch in ("mailer_sent","rvm","ai_texting","cold_calling","neutral_postcard"):
+            preserve_fields += [f"marketing_{ch}_count", f"marketing_{ch}_dates"]
+        for field in preserve_fields:
             if field not in county and field in previous:
                 county[field] = previous[field]
     return new_counties
@@ -797,6 +874,431 @@ def merge_property_metrics_into_counties(project: dict, metrics: list[dict]) -> 
     return counties
 
 
+
+def _money_float(value):
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    text = re.sub(r"[^0-9.\-]", "", text.replace(",", ""))
+    try:
+        return float(text) if text not in {"", "-", "."} else None
+    except Exception:
+        return None
+
+
+def _acres_float(value):
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip().lower().replace(",", "")
+    m = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    return float(m.group(0)) if m else None
+
+
+MARKETING_CHANNELS = {
+    "mailer_sent": {
+        "label": "Mailer Sent",
+        "count_aliases": ["mailer sent","mailers sent","mailer","direct mail","mail sent","letters sent","mailer count"],
+        "date_aliases": ["mailer date","mailer sent date","mail date","direct mail date","mailer sent on"],
+    },
+    "rvm": {
+        "label": "RVM",
+        "count_aliases": ["rvm","rvm sent","rvm count","ringless voicemail","ringless voicemail sent"],
+        "date_aliases": ["rvm date","rvm sent date","ringless voicemail date"],
+    },
+    "ai_texting": {
+        "label": "AI Texting",
+        "count_aliases": ["ai texting","ai text","ai texts","ai texting sent","ai text sent","ai texting count"],
+        "date_aliases": ["ai texting date","ai text date","ai texts date","ai texting sent date"],
+    },
+    "cold_calling": {
+        "label": "Cold Calling",
+        "count_aliases": ["cold calling","cold calls","cold call","cold calls made","cold calling count"],
+        "date_aliases": ["cold calling date","cold call date","cold calls date"],
+    },
+    "neutral_postcard": {
+        "label": "Neutral Postcard",
+        "count_aliases": ["neutral postcard","neutral postcards","neutral postcard sent","neutral postcard count"],
+        "date_aliases": ["neutral postcard date","neutral postcards date","neutral postcard sent date"],
+    },
+}
+
+
+def _marketing_count(value, has_date: bool) -> float:
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return 1.0 if has_date else 0.0
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    text = str(value).strip().casefold()
+    if text in {"yes","y","true","sent","done","x","si","sí","1"}:
+        return 1.0
+    if text in {"no","n","false","0","none","na","n/a"}:
+        return 0.0
+    m = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", text)
+    if m:
+        try:
+            return max(0.0, float(m.group(0).replace(",", "")))
+        except Exception:
+            pass
+    return 1.0 if has_date else 0.0
+
+
+def _marketing_date(value) -> str:
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return ""
+    try:
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.notna(dt):
+            return dt.date().isoformat()
+    except Exception:
+        pass
+    return str(value).strip()[:80]
+
+
+def read_marketing_activity_file(path: Path) -> tuple[list[dict], dict]:
+    df = _read_tabular_file(path)
+    state_col = find_column(df, ["state","property state","prop state","estado","st"])
+    county_col = find_column(df, ["county","county name","property county","condado"])
+    if not state_col or not county_col:
+        raise ValueError("Marketing Activity requires STATE and COUNTY columns.")
+
+    channel_cols = {}
+    for key, cfg in MARKETING_CHANNELS.items():
+        channel_cols[key] = (
+            find_column(df, cfg["count_aliases"]),
+            find_column(df, cfg["date_aliases"]),
+        )
+    if not any(c or d for c, d in channel_cols.values()):
+        raise ValueError("No supported marketing columns were found. Add Mailer Sent/Date, RVM/Date, AI Texting/Date, Cold Calling/Date, or Neutral Postcard/Date.")
+
+    aggregated = {}
+    valid_rows = 0
+    for _, row in df.iterrows():
+        state, sf = normalize_state(row.get(state_col, ""))
+        county = normalize_county(row.get(county_col, ""))
+        if not sf or not county:
+            continue
+        valid_rows += 1
+        for channel, (count_col, date_col) in channel_cols.items():
+            raw_date = row.get(date_col) if date_col else None
+            date = _marketing_date(raw_date)
+            count = _marketing_count(row.get(count_col) if count_col else None, bool(date))
+            if count <= 0:
+                continue
+            key = (sf, county.casefold(), channel, date)
+            rec = aggregated.setdefault(key, {
+                "state": state, "state_fips": sf, "county": county, "county_key": county.casefold(),
+                "channel": channel, "date": date, "count": 0.0,
+            })
+            rec["count"] += count
+
+    records = list(aggregated.values())
+    for r in records:
+        if abs(r["count"] - round(r["count"])) < 1e-9:
+            r["count"] = int(round(r["count"]))
+        r["event_key"] = f'{r["state_fips"]}|{r["county_key"]}|{r["channel"]}|{r["date"]}'
+    return records, {
+        "rows_uploaded": int(len(df)), "valid_rows": valid_rows, "events": len(records),
+        "states": sorted(set(r["state"] for r in records)),
+        "channels": sorted(set(r["channel"] for r in records)),
+    }
+
+
+def merge_marketing_activity(existing: list[dict], incoming: list[dict]) -> tuple[list[dict], dict]:
+    by_key = {str(r.get("event_key") or ""): dict(r) for r in existing if r.get("event_key")}
+    new = updated = unchanged = 0
+    for r in incoming:
+        key = r["event_key"]
+        old = by_key.get(key)
+        if old is None:
+            new += 1
+        elif old == r:
+            unchanged += 1
+        else:
+            updated += 1
+        by_key[key] = dict(r)
+    merged = sorted(by_key.values(), key=lambda r: (r.get("state",""), r.get("county",""), r.get("channel",""), r.get("date","")))
+    return merged, {"new": new, "updated": updated, "unchanged": unchanged}
+
+
+def build_marketing_activity_summary(records: list[dict]) -> list[dict]:
+    grouped = {}
+    for r in records:
+        k = (r.get("state_fips"), r.get("county_key"))
+        g = grouped.setdefault(k, {"state":r.get("state"),"state_fips":r.get("state_fips"),"county":r.get("county"),"county_key":r.get("county_key")})
+        ch = r.get("channel")
+        if ch not in MARKETING_CHANNELS:
+            continue
+        count_key = f"marketing_{ch}_count"
+        dates_key = f"marketing_{ch}_dates"
+        g[count_key] = float(g.get(count_key, 0) or 0) + float(r.get("count", 0) or 0)
+        g.setdefault(dates_key, []).append({"date": r.get("date") or "", "count": r.get("count", 0) or 0})
+    out=[]
+    for g in grouped.values():
+        for ch in MARKETING_CHANNELS:
+            ck=f"marketing_{ch}_count"; dk=f"marketing_{ch}_dates"
+            if ck in g and abs(g[ck]-round(g[ck]))<1e-9: g[ck]=int(round(g[ck]))
+            if dk in g:
+                g[dk]=sorted(g[dk], key=lambda x: x.get("date") or "", reverse=True)
+        out.append(g)
+    return out
+
+
+def merge_marketing_activity_into_counties(project: dict, summary: list[dict]) -> list[dict]:
+    counties = project.setdefault("counties", [])
+    fields=[]
+    for ch in MARKETING_CHANNELS:
+        fields += [f"marketing_{ch}_count", f"marketing_{ch}_dates"]
+    for c in counties:
+        for field in fields:
+            c.pop(field, None)
+    by_id={(c.get("state_fips"),c.get("county_key")):c for c in counties}
+    for m in summary:
+        key=(m.get("state_fips"),m.get("county_key"))
+        c=by_id.get(key)
+        if c is None:
+            c={"county":m.get("county"),"county_key":m.get("county_key"),"state":m.get("state"),"state_fips":m.get("state_fips"),"status":"Marketing data","date":"","notes":"","priority":"","assigned_to":"","next_review":"","str":"","str_value":None}
+            for band in STR_COLUMN_ALIASES:
+                c[band]=""; c[f"{band}_value"]=None
+            counties.append(c); by_id[key]=c
+        for field in fields:
+            if field in m: c[field]=m[field]
+    counties.sort(key=lambda c:(c.get("state",""),c.get("county","")))
+    return counties
+
+
+@app.post("/api/projects/<project_id>/marketing-activity")
+def upload_marketing_activity(project_id: str):
+    try:
+        project=load_project(project_id)
+    except (FileNotFoundError,ValueError):
+        return jsonify({"error":"Map not found"}),404
+    file=request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error":"Select a marketing activity file."}),400
+    if Path(file.filename).suffix.lower() not in {".xlsx",".xlsm",".csv"}:
+        return jsonify({"error":"Use an .xlsx, .xlsm, or .csv file."}),400
+    dest=UPLOAD_DIR / f"{project_id}_marketing_{secure_filename(file.filename)}"
+    file.save(dest)
+    try:
+        incoming,meta=read_marketing_activity_file(dest)
+        existing=storage.load_marketing_activity(project_id)
+        merged,merge_meta=merge_marketing_activity(existing,incoming)
+        storage.save_marketing_activity(project_id,merged)
+        summary=build_marketing_activity_summary(merged)
+        counties=merge_marketing_activity_into_counties(project,summary)
+    except Exception as exc:
+        return jsonify({"error":str(exc)}),400
+    analytics=project.setdefault("marketing_activity",{})
+    files=analytics.setdefault("source_files",[])
+    files.append({"name":file.filename,"uploaded_at":now_iso(),"rows":meta.get("rows_uploaded"),"events":meta.get("events")})
+    analytics.update({
+        "loaded":True,"states":sorted(set(r.get("state") for r in merged if r.get("state"))),
+        "events":len(merged),"last_upload_at":now_iso(),"last_upload_rows":meta.get("rows_uploaded"),
+        "last_upload_valid":meta.get("valid_rows"),"channels":meta.get("channels",[]),
+    })
+    project["counties"]=counties
+    save_project(project)
+    socketio.emit("counties_updated", {"counties":counties}, to=project_id)
+    return jsonify({"ok":True,"counties":counties,"analytics":analytics,"upload":{**meta,**merge_meta}})
+
+
+def _market_state_county(row, df):
+    state_col = find_column(df, ["state", "st", "property state", "address state", "region"])
+    county_col = find_column(df, ["county", "county name", "property county", "condado"])
+    state = str(row.get(state_col, "") if state_col else "").strip()
+    county = str(row.get(county_col, "") if county_col else "").strip()
+
+    # Land.com-style coded downloads: structured JSON and address text.
+    raw_json = row.get("bc7c8e2") if "bc7c8e2" in df.columns else None
+    if (not state or not county) and raw_json is not None and not pd.isna(raw_json):
+        try:
+            data = json.loads(str(raw_json))
+            addr = data.get("address") or {}
+            state = state or str(addr.get("addressRegion") or "").strip()
+        except Exception:
+            pass
+    addr_text = ""
+    if "_28d22f4" in df.columns:
+        v = row.get("_28d22f4")
+        if v is not None and not pd.isna(v):
+            addr_text = str(v)
+    if not county and addr_text:
+        m = re.search(r"([^,]+?)\s+County\s*$", addr_text, flags=re.I)
+        if m:
+            county = m.group(1).strip()
+    if not state and addr_text:
+        # find 2-letter state token followed by ZIP/comma
+        m = re.search(r",\s*([A-Z]{2})\s*,?\s*\d{5}(?:-\d{4})?", addr_text)
+        if m:
+            state = m.group(1)
+
+    state, sf = normalize_state(state)
+    county = normalize_county(county)
+    return state, sf, county
+
+
+def read_market_file(path: Path, status: str) -> tuple[list[dict], dict]:
+    df = _read_tabular_file(path)
+    price_col = find_column(df, ["price", "list price", "sold price", "sale price", "asking price", "listing price"])
+    acres_col = find_column(df, ["acres", "acreage", "lot acres", "size acres", "land acres"])
+    url_col = find_column(df, ["url", "listing url", "property url", "link", "href"])
+    address_col = find_column(df, ["address", "property address", "listing address", "location"])
+    # Known Land.com encoded columns.
+    if price_col is None and "_47a280d" in df.columns: price_col = "_47a280d"
+    if acres_col is None and "_28423b5" in df.columns: acres_col = "_28423b5"
+    if url_col is None and "_1cd8ad9 href" in df.columns: url_col = "_1cd8ad9 href"
+    if address_col is None and "_28d22f4" in df.columns: address_col = "_28d22f4"
+
+    records = {}
+    skipped = 0
+    for _, row in df.iterrows():
+        state, sf, county = _market_state_county(row, df)
+        acres = _acres_float(row.get(acres_col)) if acres_col else None
+        price = _money_float(row.get(price_col)) if price_col else None
+        if not sf or not county:
+            skipped += 1
+            continue
+        url = ""
+        if url_col:
+            v = row.get(url_col)
+            url = "" if v is None or pd.isna(v) else str(v).strip()
+        address = ""
+        if address_col:
+            v = row.get(address_col)
+            address = "" if v is None or pd.isna(v) else str(v).strip()
+        # Prefer stable listing URL. Fallback is normalized address + acres + state/county.
+        if url:
+            key = f"url|{url.casefold()}"
+        else:
+            key = "|".join([state, county.casefold(), _norm_owner_piece(address), str(acres or "")])
+        records[key] = {
+            "market_key": key,
+            "status": status,
+            "state": state,
+            "state_fips": sf,
+            "county": county,
+            "county_key": county.casefold(),
+            "acres": acres,
+            "price": price,
+            "address": address,
+            "source_file": path.name,
+            "updated_at": now_iso(),
+        }
+    out = list(records.values())
+    if not out:
+        raise ValueError("No valid market rows with state/county could be read from this file.")
+    return out, {"rows_uploaded": int(len(df)), "valid_rows": len(out), "skipped_rows": skipped}
+
+
+def merge_market_records(existing: list[dict], incoming: list[dict], status: str) -> tuple[list[dict], dict]:
+    # ACTIVE is a snapshot by state: replace prior active inventory for states in the upload.
+    # SOLD is historical/event data: upsert by listing key and keep prior sold records.
+    incoming_states = {r.get("state") for r in incoming if r.get("state")}
+    if status == "active":
+        kept = [r for r in existing if not (r.get("status") == "active" and r.get("state") in incoming_states)]
+        merged = kept + incoming
+        return merged, {"replaced_active_states": sorted(incoming_states), "added": len(incoming)}
+    by_key = {str(r.get("market_key") or ""): dict(r) for r in existing if r.get("market_key")}
+    added = updated = 0
+    for r in incoming:
+        key = r["market_key"]
+        if key in by_key: updated += 1
+        else: added += 1
+        by_key[key] = r
+    return list(by_key.values()), {"added": added, "updated": updated}
+
+
+def calculate_market_metrics(records: list[dict], min_acres=None, max_acres=None) -> list[dict]:
+    def keep(r):
+        a = r.get("acres")
+        if min_acres is not None and (a is None or a < min_acres): return False
+        if max_acres is not None and (a is None or a > max_acres): return False
+        return True
+    grouped = {}
+    for r in records:
+        if not keep(r): continue
+        k = (r.get("state_fips"), r.get("county_key"))
+        g = grouped.setdefault(k, {"state":r.get("state"),"state_fips":r.get("state_fips"),"county":r.get("county"),"county_key":r.get("county_key"),"active":[],"sold":[]})
+        g[r.get("status") if r.get("status") in {"active","sold"} else "active"].append(r)
+    out=[]
+    for g in grouped.values():
+        active=g["active"]; sold=g["sold"]
+        ap=[r.get("price") for r in active if isinstance(r.get("price"),(int,float))]
+        sp=[r.get("price") for r in sold if isinstance(r.get("price"),(int,float))]
+        ac=len(active); sc=len(sold)
+        out.append({
+            "state":g["state"],"state_fips":g["state_fips"],"county":g["county"],"county_key":g["county_key"],
+            "market_active_count":ac,"market_sold_count":sc,
+            "market_str": round((sc/ac)*100,2) if ac else None,
+            "market_avg_active_price": round(sum(ap)/len(ap),2) if ap else None,
+            "market_avg_sold_price": round(sum(sp)/len(sp),2) if sp else None,
+        })
+    return out
+
+
+@app.post("/api/projects/<project_id>/market/<status>")
+def upload_market_data(project_id: str, status: str):
+    status = str(status or "").lower().strip()
+    if status not in {"active","sold"}:
+        return jsonify({"error":"Status must be active or sold."}), 400
+    try:
+        project = load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error":"Map not found"}), 404
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error":"Select a CSV/Excel market file."}), 400
+    ext=Path(file.filename).suffix.lower()
+    if ext not in {".csv",".xlsx",".xlsm"}:
+        return jsonify({"error":"Use .csv, .xlsx, or .xlsm."}),400
+    dest=UPLOAD_DIR / f"{project_id}_market_{status}_{secure_filename(file.filename)}"
+    file.save(dest)
+    try:
+        incoming, meta = read_market_file(dest, status)
+        existing = storage.load_market_records(project_id)
+        merged, merge_meta = merge_market_records(existing, incoming, status)
+        storage.save_market_records(project_id, merged)
+    except Exception as exc:
+        return jsonify({"error":str(exc)}),400
+    analytics=project.setdefault("market_analytics", {})
+    key="active_files" if status=="active" else "sold_files"
+    arr=list(analytics.get(key,[]))
+    if file.filename not in arr: arr.append(file.filename)
+    analytics[key]=arr[-50:]
+    analytics.update({
+        "loaded":True,
+        "active_count":sum(1 for r in merged if r.get("status")=="active"),
+        "sold_count":sum(1 for r in merged if r.get("status")=="sold"),
+        "states":sorted({r.get("state") for r in merged if r.get("state")}),
+        "last_upload_status":status,
+        "last_upload_at":now_iso(),
+        "last_upload_rows":meta.get("rows_uploaded"),
+        "last_upload_valid":meta.get("valid_rows"),
+    })
+    save_project(project)
+    return jsonify({"ok":True,"analytics":analytics,"upload":{**meta,**merge_meta}})
+
+
+@app.get("/api/projects/<project_id>/market-metrics")
+def market_metrics(project_id: str):
+    try:
+        load_project(project_id)
+    except (FileNotFoundError, ValueError):
+        return jsonify({"error":"Map not found"}),404
+    try:
+        min_acres = request.args.get("min_acres")
+        max_acres = request.args.get("max_acres")
+        min_acres = float(min_acres) if min_acres not in {None,""} else None
+        max_acres = float(max_acres) if max_acres not in {None,""} else None
+    except ValueError:
+        return jsonify({"error":"Invalid acreage range"}),400
+    records=storage.load_market_records(project_id)
+    metrics=calculate_market_metrics(records,min_acres,max_acres)
+    return jsonify({"metrics":metrics,"counties":len(metrics),"min_acres":min_acres,"max_acres":max_acres})
+
+
 @app.post("/api/projects/<project_id>/properties")
 def upload_properties(project_id: str):
     try:
@@ -914,6 +1416,7 @@ def create_project():
             "property_point_style": {"size": 4, "color": "#22c55e", "opacity": 0.75, "outline_color": "#0f172a", "outline_width": 1},
             "layers": {"counties": True, "county_labels": True, "str_colors": True, "drawings": True, "drawing_labels": True, "property_points": True},
             "layer_order": ["counties", "drawings", "drawing_labels", "county_labels", "property_points"],
+            "county_card_fields": ["average_str","property_count","unique_owner_count","portfolio_owner_count","portfolio_property_count","total_acreage","average_acreage","market_active_count","market_sold_count","market_str","market_avg_active_price","market_avg_sold_price","str_by_acreage","mailer_sent","rvm","ai_texting","cold_calling","neutral_postcard"],
         },
     }
     save_project(project)
@@ -1060,6 +1563,7 @@ def save_project_settings(project_id: str):
     if not isinstance(settings, dict):
         return jsonify({"error": "Invalid settings"}), 400
     allowed_layers = {"counties", "county_labels", "str_colors", "drawings", "drawing_labels", "property_points"}
+    allowed_card_fields = {"average_str","property_count","unique_owner_count","portfolio_owner_count","portfolio_property_count","total_acreage","average_acreage","market_active_count","market_sold_count","market_str","market_avg_active_price","market_avg_sold_price","str_by_acreage","mailer_sent","rvm","ai_texting","cold_calling","neutral_postcard","status"}
     clean = {
         "state_filter": str(settings.get("state_filter") or "")[:2].upper(),
         "str_min": settings.get("str_min") if isinstance(settings.get("str_min"), (int, float)) else None,
@@ -1078,7 +1582,10 @@ def save_project_settings(project_id: str):
         },
         "layers": {k: bool((settings.get("layers") or {}).get(k, True)) for k in allowed_layers},
         "layer_order": [k for k in (settings.get("layer_order") or ["counties","drawings","drawing_labels","county_labels","property_points"]) if k in {"counties","drawings","drawing_labels","county_labels","property_points"}],
+        "county_card_fields": [k for k in (settings.get("county_card_fields") or []) if k in allowed_card_fields],
     }
+    if not clean["county_card_fields"]:
+        clean["county_card_fields"] = ["average_str","property_count","portfolio_owner_count","mailer_sent"]
     # Ensure every reorderable layer exists exactly once.
     for _k in ["counties","drawings","drawing_labels","county_labels","property_points"]:
         if _k not in clean["layer_order"]:
@@ -1120,6 +1627,8 @@ def duplicate_project(project_id: str):
     try:
         storage.save_property_records(clone["id"], storage.load_property_records(project_id))
         storage.save_property_points(clone["id"], storage.load_property_points(project_id))
+        storage.save_market_records(clone["id"], storage.load_market_records(project_id))
+        storage.save_marketing_activity(clone["id"], storage.load_marketing_activity(project_id))
     except Exception:
         # Project duplication should still succeed even if an old map has no property store.
         pass

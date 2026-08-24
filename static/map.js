@@ -9,6 +9,12 @@
   const propertyFileName = document.getElementById('propertyFileName');
   if (fileInput && fileName) fileInput.addEventListener('change', () => { fileName.textContent = fileInput.files?.[0]?.name || 'No file selected'; });
   if (propertyFileInput && propertyFileName) propertyFileInput.addEventListener('change', () => { propertyFileName.textContent = propertyFileInput.files?.[0]?.name || 'No file selected'; });
+  const marketActiveFileInput=document.getElementById('marketActiveFile'); const marketActiveFileName=document.getElementById('marketActiveFileName');
+  const marketSoldFileInput=document.getElementById('marketSoldFile'); const marketSoldFileName=document.getElementById('marketSoldFileName');
+  if(marketActiveFileInput&&marketActiveFileName) marketActiveFileInput.addEventListener('change',()=>{marketActiveFileName.textContent=marketActiveFileInput.files?.[0]?.name||'No file selected';});
+  if(marketSoldFileInput&&marketSoldFileName) marketSoldFileInput.addEventListener('change',()=>{marketSoldFileName.textContent=marketSoldFileInput.files?.[0]?.name||'No file selected';});
+  const marketingActivityFileInput=document.getElementById('marketingActivityFile'); const marketingActivityFileName=document.getElementById('marketingActivityFileName');
+  if(marketingActivityFileInput&&marketingActivityFileName) marketingActivityFileInput.addEventListener('change',()=>{marketingActivityFileName.textContent=marketingActivityFileInput.files?.[0]?.name||'No file selected';});
   const mapPanel = document.getElementById('mapPanel');
   const mobilePanelToggle = document.getElementById('mobilePanelToggle');
   if (mapPanel && mobilePanelToggle) {
@@ -32,6 +38,8 @@
   };
   let searchFilter = savedSettings.search_filter || '';
   let layerSettings = Object.assign({ counties:true, county_labels:true, str_colors:true, drawings:true, drawing_labels:true, property_points:true }, savedSettings.layers || {});
+  const DEFAULT_CARD_FIELDS=['average_str','property_count','unique_owner_count','portfolio_owner_count','portfolio_property_count','total_acreage','average_acreage','market_active_count','market_sold_count','market_str','market_avg_active_price','market_avg_sold_price','str_by_acreage','mailer_sent','rvm','ai_texting','cold_calling','neutral_postcard'];
+  let countyCardFields=Array.isArray(savedSettings.county_card_fields)?savedSettings.county_card_fields.filter(Boolean):[...DEFAULT_CARD_FIELDS];
   const DEFAULT_LAYER_ORDER = ['counties','drawings','drawing_labels','county_labels','property_points']; // bottom -> top
   let layerOrder = Array.isArray(savedSettings.layer_order) ? savedSettings.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k)) : [...DEFAULT_LAYER_ORDER];
   DEFAULT_LAYER_ORDER.forEach(k=>{ if(!layerOrder.includes(k)) layerOrder.push(k); });
@@ -86,12 +94,32 @@
     total_acreage:{label:'Total Acreage',short:'Total ac',type:'property',decimals:1},
     average_acreage:{label:'Average Acreage',short:'Avg ac',type:'property',decimals:1}
   };
-  const METRICS = {...STR_METRICS,...PROPERTY_METRICS};
+  const MARKET_METRICS={
+    market_str:{label:'Market STR',short:'Mkt STR',type:'market_str',decimals:1},
+    market_active_count:{label:'Active Listings',short:'Active',type:'property',decimals:0},
+    market_sold_count:{label:'Sold Listings',short:'Sold',type:'property',decimals:0},
+    market_avg_active_price:{label:'Avg Active Price',short:'Avg active $',type:'property',decimals:0,currency:true},
+    market_avg_sold_price:{label:'Avg Sold Price',short:'Avg sold $',type:'property',decimals:0,currency:true}
+  };
+  const MARKETING_METRICS={
+    marketing_mailer_sent_count:{label:'Mailer Sent',short:'Mailer',type:'property',decimals:0},
+    marketing_rvm_count:{label:'RVM',short:'RVM',type:'property',decimals:0},
+    marketing_ai_texting_count:{label:'AI Texting',short:'AI texts',type:'property',decimals:0},
+    marketing_cold_calling_count:{label:'Cold Calling',short:'Cold calls',type:'property',decimals:0},
+    marketing_neutral_postcard_count:{label:'Neutral Postcard',short:'Postcards',type:'property',decimals:0}
+  };
+  const METRICS = {...STR_METRICS,...PROPERTY_METRICS,...MARKET_METRICS,...MARKETING_METRICS};
+  const CARD_FIELDS={
+    average_str:'Average STR', property_count:'Properties', unique_owner_count:'Unique Owners', portfolio_owner_count:'Portfolio Owners', portfolio_property_count:'Portfolio Properties',
+    total_acreage:'Total Acreage', average_acreage:'Average Acreage', market_active_count:'Active Listings', market_sold_count:'Sold Listings', market_str:'Market STR',
+    market_avg_active_price:'Avg Active Price', market_avg_sold_price:'Avg Sold Price', str_by_acreage:'STR by Acreage', mailer_sent:'Mailer Sent', rvm:'RVM',
+    ai_texting:'AI Texting', cold_calling:'Cold Calling', neutral_postcard:'Neutral Postcard', status:'Status / Date'
+  };
   function metricInfo(){ return METRICS[strMetric] || STR_METRICS.str_value; }
-  function isStrMetric(){ return metricInfo().type === 'str'; }
+  function isStrMetric(){ return ['str','market_str'].includes(metricInfo().type); }
   function numericMetric(c){ const raw=c?.[strMetric]; if(raw===null||raw===undefined||raw==='')return null; const n=Number(raw); return Number.isFinite(n) ? n : null; }
   function numericStr(c){ if(!isStrMetric())return null; const raw=c?.[strMetric]; if(raw===null||raw===undefined||raw==='')return null; const n=Number(raw); return Number.isFinite(n) ? n : null; }
-  function displayMetric(c){ const info=metricInfo(); const n=numericMetric(c); if(n===null)return 'N/A'; if(info.type==='str') return c?.[info.display] || `${n.toFixed(2).replace(/\.00$/,'')}%`; return n.toLocaleString(undefined,{maximumFractionDigits:info.decimals??1}); }
+  function displayMetric(c){ const info=metricInfo(); const n=numericMetric(c); if(n===null)return 'N/A'; if(info.type==='str') return c?.[info.display] || `${n.toFixed(2).replace(/\.00$/,'')}%`; if(info.type==='market_str') return `${n.toFixed(1).replace(/\.0$/,'')}%`; if(info.currency) return n.toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:0}); return n.toLocaleString(undefined,{maximumFractionDigits:info.decimals??1}); }
   function displayStr(c){ const info=metricInfo(); return info.type==='str' ? (c?.[info.display] || (numericMetric(c)===null?'N/A':`${numericMetric(c).toFixed(2).replace(/\.00$/,'')}%`)) : 'N/A'; }
   function quantile(sorted,q){ if(!sorted.length)return 0; const pos=(sorted.length-1)*q, base=Math.floor(pos), rest=pos-base; return sorted[base+1]!==undefined ? sorted[base]+rest*(sorted[base+1]-sorted[base]) : sorted[base]; }
   function activePropertyThresholds(){ if(propertyColorMode==='custom') return propertyThresholds; const vals=counties.filter(visibleCounty).map(numericMetric).filter(v=>v!==null).sort((a,b)=>a-b); if(!vals.length)return [0,0,0,0]; return [.2,.4,.6,.8].map(q=>quantile(vals,q)); }
@@ -144,6 +172,52 @@
       <tr><td>Average acreage</td><td><b>${f(hit.average_acreage,1)}</b></td></tr>
     </tbody></table></div>`;
   }
+  function marketAnalyticsHtml(hit){
+    const f=(v,d=0)=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d}):'N/A';
+    const money=v=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:0}):'N/A';
+    if(hit?.market_active_count===undefined && hit?.market_sold_count===undefined) return '<div class="empty-str">No market analytics loaded for this acreage range.</div>';
+    return `<table class="str-table"><tbody>
+      <tr><td>Active listings</td><td><b>${f(hit.market_active_count)}</b></td></tr>
+      <tr><td>Sold listings</td><td><b>${f(hit.market_sold_count)}</b></td></tr>
+      <tr><td>Market STR</td><td><b>${hit.market_str==null?'N/A':f(hit.market_str,1)+'%'}</b></td></tr>
+      <tr><td>Avg active price</td><td><b>${money(hit.market_avg_active_price)}</b></td></tr>
+      <tr><td>Avg sold price</td><td><b>${money(hit.market_avg_sold_price)}</b></td></tr>
+    </tbody></table>`;
+  }
+  function marketingDatesHtml(items){
+    if(!Array.isArray(items)||!items.length)return '<span>No dates</span>';
+    return items.map(x=>`<span>${esc(x.date||'Undated')}${Number(x.count)>0?` (${Number(x.count).toLocaleString()})`:''}</span>`).join(' · ');
+  }
+  function cardRow(label,value,detail=''){
+    return `<tr><td>${esc(label)}</td><td><b>${value}</b>${detail?`<div class="marketing-dates">${detail}</div>`:''}</td></tr>`;
+  }
+  function selectedCountyDataHtml(hit){
+    const selected=new Set(countyCardFields);
+    const rows=[];
+    const num=(v,d=0)=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d}):'N/A';
+    const money=v=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{style:'currency',currency:'USD',maximumFractionDigits:0}):'N/A';
+    if(selected.has('average_str')) rows.push(cardRow('Average STR',hit.str|| (hit.str_value!=null?num(hit.str_value,1)+'%':'N/A')));
+    if(selected.has('property_count')) rows.push(cardRow('Properties',num(hit.property_count)));
+    if(selected.has('unique_owner_count')) rows.push(cardRow('Unique owners',num(hit.unique_owner_count)));
+    if(selected.has('portfolio_owner_count')) rows.push(cardRow('Portfolio owners',num(hit.portfolio_owner_count)));
+    if(selected.has('portfolio_property_count')) rows.push(cardRow('Portfolio properties',num(hit.portfolio_property_count)));
+    if(selected.has('total_acreage')) rows.push(cardRow('Total acreage',num(hit.total_acreage,1)));
+    if(selected.has('average_acreage')) rows.push(cardRow('Average acreage',num(hit.average_acreage,1)));
+    if(selected.has('market_active_count')) rows.push(cardRow('Active listings',num(hit.market_active_count)));
+    if(selected.has('market_sold_count')) rows.push(cardRow('Sold listings',num(hit.market_sold_count)));
+    if(selected.has('market_str')) rows.push(cardRow('Market STR',hit.market_str==null?'N/A':num(hit.market_str,1)+'%'));
+    if(selected.has('market_avg_active_price')) rows.push(cardRow('Avg active price',money(hit.market_avg_active_price)));
+    if(selected.has('market_avg_sold_price')) rows.push(cardRow('Avg sold price',money(hit.market_avg_sold_price)));
+    const marketing=[
+      ['mailer_sent','Mailer Sent'],['rvm','RVM'],['ai_texting','AI Texting'],['cold_calling','Cold Calling'],['neutral_postcard','Neutral Postcard']
+    ];
+    marketing.forEach(([key,label])=>{if(selected.has(key)){const count=hit[`marketing_${key}_count`];const dates=hit[`marketing_${key}_dates`];rows.push(cardRow(label,num(count),marketingDatesHtml(dates)));}});
+    if(selected.has('status')) rows.push(cardRow('Status',esc(hit.status||'Active'),hit.date?`Date: ${esc(hit.date)}`:''));
+    let html=rows.length?`<div class="card-section-title">Selected County Data</div><table class="str-table"><tbody>${rows.join('')}</tbody></table>`:'<div class="empty-str">No county-card fields selected.</div>';
+    if(selected.has('str_by_acreage')) html+=`<div class="card-section-title">STR by Acreage</div>${strRows(hit)}`;
+    return html;
+  }
+
   function popupHtml(feature, hit) {
     if (!hit) return `<div class="county-popup inactive-county"><h3>${esc(feature.properties.name)} County</h3><p>This county is not active in this project.</p><p class="small">Activate it with a neutral color. STR or property information can be added later.</p><button type="button" class="activate-county">Activate County</button><span class="activate-state"></span></div>`;
     const selected=numericMetric(hit);
@@ -151,9 +225,7 @@
     return `<div class="county-popup">
       <h3>${esc(feature.properties.name)} County, ${esc(hit.state)}</h3>${top}
       <div class="avg-card" style="border-color:${metricColor(selected)}"><span>${esc(metricInfo().label)}</span><strong>${esc(displayMetric(hit))}</strong></div>
-      <div class="popup-meta"><b>Status:</b> ${esc(hit.status || 'Active')}${hit.date ? `<br><b>Date:</b> ${esc(hit.date)}` : ''}</div>
-      <h4>Property Analytics</h4>${propertyAnalyticsHtml(hit)}
-      <h4>STR by acreage</h4>${strRows(hit)}
+      ${selectedCountyDataHtml(hit)}
       <div class="form-grid">
         <label>Priority<input class="county-priority" value="${esc(hit.priority || '')}" placeholder="A, B, High..."></label>
         <label>Assigned to<input class="county-assigned" value="${esc(hit.assigned_to || '')}" placeholder="Name"></label>
@@ -246,7 +318,7 @@
   function fitVisibleCounties() { const bounds=[]; countyLayer.eachLayer(l=>{ const h=countyMatch(l.feature); if (visibleCounty(h)) bounds.push(l.getBounds()); }); if (bounds.length) { const b=bounds[0]; bounds.slice(1).forEach(x=>b.extend(x)); map.fitBounds(b,{padding:[20,20]}); } }
 
   function currentViewSettings() {
-    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings}, layer_order:[...layerOrder] };
+    return { state_filter:stateFilter, str_metric:isStrMetric()?strMetric:'str_value', color_metric:strMetric, property_color_mode:propertyColorMode, property_thresholds:propertyThresholds, property_point_style:{...propertyPointStyle}, search_filter:searchFilter, layers:{...layerSettings}, layer_order:[...layerOrder], county_card_fields:[...countyCardFields] };
   }
   function setAutosave(text) { const el=document.getElementById('autosaveState'); if(el) el.textContent=text; }
   function queueSettingsSave() {
@@ -288,6 +360,14 @@
     applyLayerOrder();
     refreshCountyStyles(); refreshDrawingLabels(); renderDrawnAreas(); schedulePropertyPoints();
   }
+  function renderCountyCardFields(){
+    const box=document.getElementById('countyCardFields'); if(!box)return;
+    box.innerHTML=Object.entries(CARD_FIELDS).map(([key,label])=>`<label><input type="checkbox" data-card-field="${esc(key)}" ${countyCardFields.includes(key)?'checked':''}> ${esc(label)}</label>`).join('');
+    box.querySelectorAll('[data-card-field]').forEach(cb=>cb.addEventListener('change',()=>{
+      countyCardFields=[...box.querySelectorAll('[data-card-field]:checked')].map(x=>x.dataset.cardField);
+      queueSettingsSave();
+    }));
+  }
   function applySettingsToInputs() {
     document.getElementById('countySearch').value=searchFilter;
     document.getElementById('strMetric').value=strMetric;
@@ -300,6 +380,7 @@
     const opacity=document.getElementById('pointOpacity'); if(opacity) opacity.value=Math.round(propertyPointStyle.opacity*100);
     const outline=document.getElementById('pointOutlineColor'); if(outline) outline.value=propertyPointStyle.outline_color;
     updatePointControlLabels();
+    renderCountyCardFields();
   }
   function updatePointControlLabels(){
     const sv=document.getElementById('pointSizeValue'); if(sv) sv.textContent=String(propertyPointStyle.size);
@@ -455,13 +536,64 @@
   const pointOutline=document.getElementById('pointOutlineColor'); if(pointOutline) pointOutline.addEventListener('input',()=>{propertyPointStyle.outline_color=pointOutline.value;updatePointControlLabels();schedulePropertyPoints();queueSettingsSave();});
   const resetPointStyle=document.getElementById('resetPointStyle'); if(resetPointStyle) resetPointStyle.addEventListener('click',()=>{propertyPointStyle={size:4,color:'#22c55e',opacity:.75,outline_color:'#0f172a',outline_width:1};applySettingsToInputs();schedulePropertyPoints();queueSettingsSave();});
 
+  const cardSelectAll=document.getElementById('cardSelectAll'); if(cardSelectAll) cardSelectAll.addEventListener('click',()=>{countyCardFields=Object.keys(CARD_FIELDS);renderCountyCardFields();queueSettingsSave();});
+  const cardClear=document.getElementById('cardClear'); if(cardClear) cardClear.addEventListener('click',()=>{countyCardFields=[];renderCountyCardFields();queueSettingsSave();});
+
+  async function uploadMarketingActivity(file){
+    if(!file)return;
+    const box=document.getElementById('marketingActivityStatus'); const fd=new FormData(); fd.append('file',file);
+    if(box)box.textContent='Loading marketing activity…';
+    try{
+      const r=await fetch(`/api/projects/${projectId}/marketing-activity`,{method:'POST',body:fd}),d=await r.json();
+      if(!r.ok)throw new Error(d.error||'Marketing activity upload failed');
+      counties=d.counties||counties; window.PROJECT.marketing_activity=d.analytics||{};
+      refreshCountyStyles();
+      if(box){const u=d.upload||{};box.textContent=`${Number(u.events||0).toLocaleString()} county/date/channel events read · ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(d.analytics?.events||0).toLocaleString()} stored.`;}
+      status.textContent='Marketing activity updated.';
+    }catch(e){if(box)box.textContent=e.message;}
+  }
+  const marketingActivityForm=document.getElementById('marketingActivityForm'); if(marketingActivityForm) marketingActivityForm.addEventListener('submit',async e=>{e.preventDefault();await uploadMarketingActivity(document.getElementById('marketingActivityFile').files[0]);});
+
+  function clearMarketMetricFields(){
+    const fields=['market_active_count','market_sold_count','market_str','market_avg_active_price','market_avg_sold_price'];
+    counties.forEach(c=>fields.forEach(f=>delete c[f]));
+  }
+  async function refreshMarketMetrics(){
+    const box=document.getElementById('marketAnalyticsStatus');
+    const min=document.getElementById('marketMinAcres')?.value||'';
+    const max=document.getElementById('marketMaxAcres')?.value||'';
+    if(box) box.textContent='Calculating market metrics…';
+    const q=new URLSearchParams(); if(min!=='')q.set('min_acres',min); if(max!=='')q.set('max_acres',max);
+    try{
+      const r=await fetch(`/api/projects/${projectId}/market-metrics?${q}`), d=await r.json(); if(!r.ok)throw new Error(d.error||'Could not calculate market metrics');
+      clearMarketMetricFields();
+      const byKey=new Map(counties.map(c=>[`${c.state_fips}|${c.county_key}`,c]));
+      (d.metrics||[]).forEach(m=>{const c=byKey.get(`${m.state_fips}|${m.county_key}`);if(c)Object.assign(c,m);else{counties.push({...m,status:'Market data',date:'',notes:'',priority:'',assigned_to:'',next_review:'',str:'',str_value:null});}});
+      refreshCountyStyles();
+      if(box)box.textContent=`${Number(d.counties||0).toLocaleString()} counties · acreage ${min||'0'} to ${max||'∞'} ac.`;
+    }catch(e){if(box)box.textContent=e.message;}
+  }
+  async function uploadMarket(statusName,file){
+    if(!file)return;
+    const box=document.getElementById('marketAnalyticsStatus'); const fd=new FormData(); fd.append('file',file);
+    if(box)box.textContent=`Loading ${statusName} market data…`;
+    const r=await fetch(`/api/projects/${projectId}/market/${statusName}`,{method:'POST',body:fd}),d=await r.json();
+    if(!r.ok){if(box)box.textContent=d.error||'Market upload failed';return;}
+    window.PROJECT.market_analytics=d.analytics||{};
+    await refreshMarketMetrics();
+    if(box){const a=d.analytics||{};box.textContent=`Market store: ${Number(a.active_count||0).toLocaleString()} active · ${Number(a.sold_count||0).toLocaleString()} sold. Last ${statusName} upload: ${Number(d.upload?.valid_rows||0).toLocaleString()} valid rows.`;}
+  }
+  const marketActiveForm=document.getElementById('marketActiveForm'); if(marketActiveForm) marketActiveForm.addEventListener('submit',async e=>{e.preventDefault();await uploadMarket('active',document.getElementById('marketActiveFile').files[0]);});
+  const marketSoldForm=document.getElementById('marketSoldForm'); if(marketSoldForm) marketSoldForm.addEventListener('submit',async e=>{e.preventDefault();await uploadMarket('sold',document.getElementById('marketSoldFile').files[0]);});
+  const refreshMarket=document.getElementById('refreshMarket'); if(refreshMarket) refreshMarket.addEventListener('click',refreshMarketMetrics);
+
   const socket=io();
   socket.on('connect',()=>{socket.emit('join_project',{project_id:projectId});status.textContent='Connected in real time.';});
   socket.on('disconnect',()=>status.textContent='Connection lost. Reconnecting…');
   socket.on('drawings_updated',d=>{if(d.sender!==clientId){replaceDrawings(d.drawings);status.textContent='Another user updated the drawn areas.';}});
   socket.on('counties_updated',d=>{counties=d.counties||[];refreshCountyStyles();status.textContent='The county data was updated by another user.';});
   socket.on('county_note_updated',d=>{if(d.sender!==clientId&&d.county){upsertCounty(d.county);renderAllPanels();status.textContent=`Another user updated ${d.county.county} County.`;map.closePopup();}});
-  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});if(Array.isArray(v.layer_order)){layerOrder=v.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k));DEFAULT_LAYER_ORDER.forEach(k=>{if(!layerOrder.includes(k))layerOrder.push(k);});}applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
+  socket.on('settings_updated',d=>{if(d.sender!==clientId&&d.view_settings){const v=d.view_settings;stateFilter=v.state_filter||'';strMetric=v.color_metric||v.str_metric||'str_value';propertyColorMode=v.property_color_mode||'automatic';propertyThresholds=Array.isArray(v.property_thresholds)?v.property_thresholds.map(Number):propertyThresholds;if(v.property_point_style)propertyPointStyle=Object.assign(propertyPointStyle,v.property_point_style);searchFilter=v.search_filter||'';layerSettings=Object.assign(layerSettings,v.layers||{});if(Array.isArray(v.layer_order)){layerOrder=v.layer_order.filter(k=>DEFAULT_LAYER_ORDER.includes(k));DEFAULT_LAYER_ORDER.forEach(k=>{if(!layerOrder.includes(k))layerOrder.push(k);});}if(Array.isArray(v.county_card_fields))countyCardFields=v.county_card_fields.filter(k=>CARD_FIELDS[k]);applySettingsToInputs();applyLayerSettings();status.textContent='Another user updated the map view.';}});
   socket.on('project_renamed',d=>{if(d.name){document.querySelector('.panel h2').textContent=d.name;document.title=d.name;}});
 
   document.getElementById('propertyUploadForm').addEventListener('submit',async e=>{e.preventDefault();const file=document.getElementById('propertyFile').files[0];if(!file)return;const fd=new FormData();fd.append('file',file);status.textContent='Processing property data…';const res=await fetch(`/api/projects/${projectId}/properties`,{method:'POST',body:fd});const data=await res.json();if(!res.ok){status.textContent=data.error||'Error uploading property data';return;}counties=data.counties;window.PROJECT.property_analytics=data.analytics||{};strMetric='property_count';document.getElementById('strMetric').value=strMetric;refreshCountyStyles();fitVisibleCounties();schedulePropertyPoints();const u=data.upload||{};status.textContent=`REF update complete: ${Number(u.new||0).toLocaleString()} new · ${Number(u.updated||0).toLocaleString()} updated · ${Number(u.unchanged||0).toLocaleString()} unchanged · ${Number(data.analytics?.total_properties||0).toLocaleString()} total properties.`;});
@@ -471,5 +603,5 @@
   document.getElementById('renameProject').onclick=async()=>{const name=prompt('Project name:',document.querySelector('.panel h2').textContent);if(!name?.trim())return;const r=await fetch(`/api/projects/${projectId}/rename`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim()})});const d=await r.json();if(!r.ok)return alert(d.error||'Could not rename');document.querySelector('.panel h2').textContent=d.name;document.title=d.name;};
   document.getElementById('duplicateProject').onclick=async()=>{const r=await fetch(`/api/projects/${projectId}/duplicate`,{method:'POST'});const d=await r.json();if(!r.ok)return alert(d.error||'Could not duplicate');location.href=d.url;};
 
-  renderAllPanels(); replaceDrawings(window.PROJECT.drawings||{type:'FeatureCollection',features:[]}); applySettingsToInputs(); applyLayerSettings(); loadCountyBoundaries();
+  renderAllPanels(); replaceDrawings(window.PROJECT.drawings||{type:'FeatureCollection',features:[]}); applySettingsToInputs(); applyLayerSettings(); loadCountyBoundaries(); if(window.PROJECT.market_analytics?.loaded) refreshMarketMetrics();
 })();
