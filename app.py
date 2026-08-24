@@ -5,9 +5,10 @@ import gzip
 import os
 import re
 import uuid
+import csv
 import threading
 import webbrowser
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 
 import pandas as pd
@@ -956,50 +957,191 @@ def _marketing_date(value) -> str:
     return str(value).strip()[:80]
 
 
+
+def _normalize_header_name(value) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
+def _find_header(headers: list[str], aliases: list[str]):
+    normalized = {_normalize_header_name(h): h for h in headers}
+    for alias in aliases:
+        key = _normalize_header_name(alias)
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
+def _is_blank_cell(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float):
+        try:
+            return value != value
+        except Exception:
+            return False
+    return str(value).strip() == ""
+
+
+def _marketing_date_safe(value) -> str:
+    """Date parser for Marketing Activity that avoids pandas/numpy entirely."""
+    if _is_blank_cell(value):
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    text = str(value).strip()
+    # Common ISO / US / Latin formats. Preserve unknown text rather than failing.
+    for fmt in (
+        "%Y-%m-%d", "%Y/%m/%d",
+        "%m/%d/%Y", "%m/%d/%y",
+        "%d/%m/%Y", "%d/%m/%y",
+        "%m-%d-%Y", "%d-%m-%Y",
+    ):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return text[:80]
+
+
+def _marketing_count_safe(value, has_date: bool) -> float:
+    """Count parser for Marketing Activity that avoids pandas/numpy entirely."""
+    if _is_blank_cell(value):
+        return 1.0 if has_date else 0.0
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        try:
+            return max(0.0, float(value))
+        except Exception:
+            return 1.0 if has_date else 0.0
+
+    text = str(value).strip().casefold()
+    if text in {"yes","y","true","sent","done","x","si","sí","1"}:
+        return 1.0
+    if text in {"no","n","false","0","none","na","n/a"}:
+        return 0.0
+    m = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", text)
+    if m:
+        try:
+            return max(0.0, float(m.group(0).replace(",", "")))
+        except Exception:
+            pass
+    return 1.0 if has_date else 0.0
+
+
+def _iter_marketing_rows(path: Path):
+    """Yield dict rows from CSV/XLSX without pandas/numpy.
+
+    This is intentionally isolated from the analytics dataframe stack because
+    some small Render instances were exiting with SIGSEGV/code 139 while
+    importing new marketing spreadsheets.
+    """
+    ext = path.suffix.lower()
+    if ext in {".xlsx", ".xlsm"}:
+        wb = load_workbook(path, data_only=True, read_only=True)
+        try:
+            ws = wb.active
+            rows = ws.iter_rows(values_only=True)
+            try:
+                first = next(rows)
+            except StopIteration:
+                return
+            headers = [str(v or "").strip() for v in first]
+            for values in rows:
+                yield headers, {headers[i]: (values[i] if i < len(values) else None) for i in range(len(headers))}
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+        return
+
+    if ext == ".csv":
+        last_error = None
+        for enc in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                with path.open("r", encoding=enc, newline="") as f:
+                    reader = csv.DictReader(f)
+                    headers = [str(h or "").strip() for h in (reader.fieldnames or [])]
+                    for row in reader:
+                        yield headers, {str(k or "").strip(): v for k, v in row.items()}
+                return
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        raise ValueError(f"Could not read marketing CSV: {last_error}")
+
+    raise ValueError("Marketing Activity supports .xlsx, .xlsm, and .csv files.")
+
+
 def read_marketing_activity_file(path: Path) -> tuple[list[dict], dict]:
-    df = _read_tabular_file(path)
-    state_col = find_column(df, ["state","property state","prop state","estado","st"])
-    county_col = find_column(df, ["county","county name","property county","condado"])
-    if not state_col or not county_col:
-        raise ValueError("Marketing Activity requires STATE and COUNTY columns.")
-
-    channel_cols = {}
-    for key, cfg in MARKETING_CHANNELS.items():
-        channel_cols[key] = (
-            find_column(df, cfg["count_aliases"]),
-            find_column(df, cfg["date_aliases"]),
-        )
-    if not any(c or d for c, d in channel_cols.values()):
-        raise ValueError("No supported marketing columns were found. Add Mailer Sent/Date, RVM/Date, AI Texting/Date, Cold Calling/Date, or Neutral Postcard/Date.")
-
+    iterator = _iter_marketing_rows(path)
     aggregated = {}
     valid_rows = 0
-    for _, row in df.iterrows():
+    total_rows = 0
+    headers = None
+    state_col = county_col = None
+    channel_cols = None
+
+    for current_headers, row in iterator:
+        if headers is None:
+            headers = current_headers
+            state_col = _find_header(headers, ["state","property state","prop state","estado","st"])
+            county_col = _find_header(headers, ["county","county name","property county","condado"])
+            if not state_col or not county_col:
+                raise ValueError("Marketing Activity requires STATE and COUNTY columns.")
+            channel_cols = {}
+            for key, cfg in MARKETING_CHANNELS.items():
+                channel_cols[key] = (
+                    _find_header(headers, cfg["count_aliases"]),
+                    _find_header(headers, cfg["date_aliases"]),
+                )
+            if not any(c or d for c, d in channel_cols.values()):
+                raise ValueError(
+                    "No supported marketing columns were found. Add Mailer Sent/Date, "
+                    "RVM/Date, AI Texting/Date, Cold Calling/Date, or Neutral Postcard/Date."
+                )
+
+        total_rows += 1
         state, sf = normalize_state(row.get(state_col, ""))
         county = normalize_county(row.get(county_col, ""))
         if not sf or not county:
             continue
         valid_rows += 1
+
         for channel, (count_col, date_col) in channel_cols.items():
             raw_date = row.get(date_col) if date_col else None
-            date = _marketing_date(raw_date)
-            count = _marketing_count(row.get(count_col) if count_col else None, bool(date))
+            event_date = _marketing_date_safe(raw_date)
+            count = _marketing_count_safe(row.get(count_col) if count_col else None, bool(event_date))
             if count <= 0:
                 continue
-            key = (sf, county.casefold(), channel, date)
+            key = (sf, county.casefold(), channel, event_date)
             rec = aggregated.setdefault(key, {
-                "state": state, "state_fips": sf, "county": county, "county_key": county.casefold(),
-                "channel": channel, "date": date, "count": 0.0,
+                "state": state,
+                "state_fips": sf,
+                "county": county,
+                "county_key": county.casefold(),
+                "channel": channel,
+                "date": event_date,
+                "count": 0.0,
             })
             rec["count"] += count
+
+    if headers is None:
+        raise ValueError("The marketing activity file is empty.")
 
     records = list(aggregated.values())
     for r in records:
         if abs(r["count"] - round(r["count"])) < 1e-9:
             r["count"] = int(round(r["count"]))
         r["event_key"] = f'{r["state_fips"]}|{r["county_key"]}|{r["channel"]}|{r["date"]}'
+
     return records, {
-        "rows_uploaded": int(len(df)), "valid_rows": valid_rows, "events": len(records),
+        "rows_uploaded": total_rows,
+        "valid_rows": valid_rows,
+        "events": len(records),
         "states": sorted(set(r["state"] for r in records)),
         "channels": sorted(set(r["channel"] for r in records)),
     }
@@ -1084,14 +1226,20 @@ def upload_marketing_activity(project_id: str):
             return jsonify({"error": "Use an .xlsx, .xlsm, or .csv file."}), 400
 
         dest = UPLOAD_DIR / f"{project_id}_marketing_{secure_filename(file.filename)}"
+        app.logger.warning("MARKETING_UPLOAD phase=save_file name=%s", file.filename)
         file.save(dest)
+        app.logger.warning("MARKETING_UPLOAD phase=parse_start bytes=%s", dest.stat().st_size if dest.exists() else -1)
 
         incoming, meta = read_marketing_activity_file(dest)
+        app.logger.warning("MARKETING_UPLOAD phase=parse_done rows=%s events=%s", meta.get("rows_uploaded"), meta.get("events"))
         existing = storage.load_marketing_activity(project_id)
+        app.logger.warning("MARKETING_UPLOAD phase=load_existing_done existing=%s", len(existing))
         merged, merge_meta = merge_marketing_activity(existing, incoming)
         storage.save_marketing_activity(project_id, merged)
+        app.logger.warning("MARKETING_UPLOAD phase=save_activity_done merged=%s", len(merged))
         summary = build_marketing_activity_summary(merged)
         counties = merge_marketing_activity_into_counties(project, summary)
+        app.logger.warning("MARKETING_UPLOAD phase=merge_counties_done counties=%s", len(counties))
 
         analytics = project.setdefault("marketing_activity", {})
         source_files = analytics.setdefault("source_files", [])
@@ -1109,7 +1257,9 @@ def upload_marketing_activity(project_id: str):
             "channels": meta.get("channels", []),
         })
         project["counties"] = counties
+        app.logger.warning("MARKETING_UPLOAD phase=save_project_start")
         save_project(project)
+        app.logger.warning("MARKETING_UPLOAD phase=save_project_done")
         try:
             socketio.emit("counties_updated", {"counties": counties}, to=project_id)
         except Exception:
