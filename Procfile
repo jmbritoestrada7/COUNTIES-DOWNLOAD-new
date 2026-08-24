@@ -1,1 +1,1 @@
-web: gunicorn --worker-class gthread --threads 8 --workers 1 --bind 0.0.0.0:$PORT app:app
+web: env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 gunicorn --worker-class gthread --threads 2 --workers 1 --timeout 180 --graceful-timeout 30 --keep-alive 5 --bind 0.0.0.0:$PORT app:app
